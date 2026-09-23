@@ -1,5 +1,4 @@
-# ΚΕΔΙΒΙΜ Diagnostic Hub V4
-Form-first interface. No spreadsheet-like editing in the main workflow.
-Includes official user-provided ΚΕΔΙΒΙΜ and University of Thessaly logos.
-Major modules upgraded: Cash Flow, Program Economics, Cost Base, Admin Workload,
-Findings & Action Plan, Data Room. Existing Supabase schema and Streamlit Secrets are reused.
+# ΚΕΔΙΒΙΜ · Diagnostic Hub — Clean Monitoring Edition
+Απλοποιημένη εφαρμογή με 6 οθόνες: Dashboard, Προγράμματα, Οικονομικά, Monitoring, Reports, Ρυθμίσεις.
+Χρησιμοποιεί το υπάρχον Supabase και τα ίδια Streamlit Secrets.
+Το ενιαίο λογότυπο ΠΘ + ΚΕΔΙΒΙΜ εμφανίζεται μόνο στην κορυφή του sidebar.
