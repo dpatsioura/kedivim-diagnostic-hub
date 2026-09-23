@@ -56,10 +56,33 @@ def editor_sync(table, original, columns, key):
     for c in columns:
         if c not in view.columns: view[c] = None
     display = view[["id"] + columns] if "id" in view.columns else view[columns]
+    greek_labels = {
+        "id":"ID","year":"Έτος","opening_cash":"Αρχικό ταμείο","revenue":"Έσοδα",
+        "payroll_admin":"Μισθοδοσία / Διοίκηση","direct_program_costs":"Άμεσα κόστη προγραμμάτων",
+        "marketing_it_operating":"Marketing / IT / Λειτουργικά","other_outflows":"Λοιπές εκροές",
+        "notes":"Σημειώσεις","code":"Κωδικός","program_name":"Πρόγραμμα / Κύκλος",
+        "scientific_lead":"Επιστημονικά Υπεύθυνος","applications":"Αιτήσεις","enrollments":"Εγγραφές",
+        "completed":"Ολοκλήρωσαν","nominal_tuition":"Ονομαστικά δίδακτρα",
+        "actual_avg_tuition":"Μέσο πραγματικό δίδακτρο","trainer_fees":"Αμοιβές εκπαιδευτών",
+        "other_direct_expenses":"Λοιπά άμεσα έξοδα","withholdings_charges":"Κρατήσεις / χρεώσεις",
+        "marketing_cost":"Κόστος marketing","admin_allocation":"Διοικητική επιβάρυνση",
+        "variable_cost_per_person":"Μεταβλητό κόστος / άτομο","status":"Κατάσταση",
+        "category":"Κατηγορία","subcategory":"Υποκατηγορία","description":"Περιγραφή",
+        "cost_type":"Σταθερό / Μεταβλητό","amount":"Ποσό","source_file":"Πηγή / Αρχείο",
+        "role":"Ρόλος","process":"Διαδικασία","frequency":"Συχνότητα","cases_per_month":"Πλήθος / μήνα",
+        "minutes_per_case":"Λεπτά / περίπτωση","system_file":"Σύστημα / Αρχείο",
+        "duplicate_entry":"Διπλή καταχώρηση;","automation_potential":"Δυνατότητα αυτοματοποίησης",
+        "finding_code":"Κωδικός ευρήματος","area":"Πεδίο","finding":"Εύρημα",
+        "evidence_source":"Τεκμηρίωση / Πηγή","root_cause":"Ριζική αιτία","impact":"Επίπτωση",
+        "priority":"Προτεραιότητα","proposed_action":"Προτεινόμενη ενέργεια","owner":"Υπεύθυνος",
+        "horizon":"Ορίζοντας","success_kpi":"KPI επιτυχίας","due_date":"Προθεσμία",
+        "item":"Ζητούμενο στοιχείο","received":"Παραλήφθηκε","received_at":"Ημερομηνία παραλαβής"
+    }
+    cfg={c: st.column_config.Column(greek_labels.get(c,c)) for c in display.columns}
     edited = st.data_editor(
         display, use_container_width=True, hide_index=True,
         num_rows="dynamic", disabled=["id"] if "id" in display.columns else False,
-        key=key
+        column_config=cfg, key=key
     )
     if st.button("Αποθήκευση αλλαγών", type="primary", key="save_"+key):
         before_ids = set(original["id"].dropna().astype(str)) if "id" in original else set()
@@ -87,14 +110,14 @@ if "is_admin" not in st.session_state:
 
 with st.sidebar:
     st.markdown("## ΚΕΔΙΒΙΜ ΠΘ")
-    st.caption("Diagnostic Hub · 2026")
+    st.caption("Κόμβος Διάγνωσης · 2026")
     st.divider()
     if st.session_state.is_admin:
-        st.success("Admin mode")
+        st.success("Λειτουργία διαχειριστή")
         if st.button("Αποσύνδεση", use_container_width=True):
             st.session_state.is_admin=False; st.rerun()
     else:
-        with st.expander("Admin login"):
+        with st.expander("Σύνδεση διαχειριστή"):
             email=st.text_input("Email")
             password=st.text_input("Κωδικός", type="password")
             if st.button("Σύνδεση", use_container_width=True):
@@ -103,13 +126,13 @@ with st.sidebar:
                     st.session_state.is_admin=True; st.rerun()
                 st.error("Μη έγκυρα στοιχεία.")
 
-    pages=["Υγεία ΚΕΔΙΒΙΜ","Annual Cash Bridge","Program Economics","Cost Base",
-           "Admin Workload","Findings & Action Plan","Data Request Room",
-           "Ερωτηματολόγια","Στρατηγικό Πλάνο","Backup / Export"]
+    pages=["Υγεία ΚΕΔΙΒΙΜ","Ταμειακή Εικόνα","Οικονομική Απόδοση Προγραμμάτων","Βάση Κόστους",
+           "Διοικητικός Φόρτος","Ευρήματα & Σχέδιο Δράσης","Συλλογή Στοιχείων",
+           "Ερωτηματολόγια","Στρατηγικό Πλάνο","Αντίγραφα & Εξαγωγές"]
     page=st.radio("Πλοήγηση",pages)
 
-st.title("ΚΕΔΙΒΙΜ · Diagnostic Hub")
-st.caption("Οικονομική, λειτουργική και στρατηγική αποτύπωση · Supabase connected")
+st.title("ΚΕΔΙΒΙΜ · Κόμβος Διάγνωσης")
+st.caption("Οικονομική, λειτουργική και στρατηγική αποτύπωση · Η βάση δεδομένων είναι συνδεδεμένη")
 
 # ---------- Load live data ----------
 try:
@@ -139,6 +162,12 @@ if page=="Υγεία ΚΕΔΙΒΙΜ":
     c1.metric("Προγράμματα",len(programs)); c2.metric("Admin ώρες/μήνα",f"{hours:.1f}")
     c3.metric("Data Request",f"{int(requests['received'].fillna(False).sum())}/{len(requests)}" if len(requests) else "0/0")
     c4.metric("Πρόσβαση","Admin" if st.session_state.is_admin else "View only")
+    st.subheader("Σύνοψη για τη Διοίκηση")
+    st.caption("Οι δείκτες ενημερώνονται αυτόματα από τα στοιχεία που έχουν καταχωριστεί στη βάση.")
+    if len(findings):
+        urgent = findings[findings.get("priority", pd.Series(index=findings.index, dtype=str)).astype(str)=="P1"]
+        if len(urgent):
+            st.warning(f"Υπάρχουν {len(urgent)} ευρήματα προτεραιότητας P1 που χρειάζονται παρακολούθηση.")
     if len(cash):
         q=cash.copy()
         for c in ["revenue","payroll_admin","direct_program_costs","marketing_it_operating","other_outflows"]:
@@ -149,8 +178,9 @@ if page=="Υγεία ΚΕΔΙΒΙΜ":
     else:
         st.info("Η βάση είναι συνδεδεμένη. Περιμένει τα πρώτα πραγματικά οικονομικά δεδομένα.")
 
-elif page=="Annual Cash Bridge":
-    st.subheader(page)
+elif page=="Ταμειακή Εικόνα":
+    st.subheader("Ταμειακή Εικόνα")
+    st.caption("Παρακολούθηση εσόδων, εκροών και ετήσιας ταμειακής μεταβολής.")
     cols=["year","opening_cash","revenue","payroll_admin","direct_program_costs","marketing_it_operating","other_outflows","notes"]
     if st.session_state.is_admin:
         editor_sync("cash_bridge",cash,cols,"cash")
@@ -164,7 +194,7 @@ elif page=="Annual Cash Bridge":
         st.subheader("Υπολογισμένη εικόνα")
         st.dataframe(q[["year","net_change","closing_cash"]],use_container_width=True,hide_index=True)
 
-elif page=="Program Economics":
+elif page=="Οικονομική Απόδοση Προγραμμάτων":
     st.subheader(page)
     cols=["year","code","program_name","scientific_lead","applications","enrollments","completed",
           "nominal_tuition","actual_avg_tuition","trainer_fees","other_direct_expenses",
@@ -184,14 +214,14 @@ elif page=="Program Economics":
         st.subheader("Οικονομικοί δείκτες")
         st.dataframe(q[["program_name","collected_revenue","direct_contribution","net_contribution","category"]],use_container_width=True,hide_index=True)
 
-elif page=="Cost Base":
+elif page=="Βάση Κόστους":
     st.subheader(page)
     cols=["year","category","subcategory","description","cost_type","amount","source_file","notes"]
     if st.session_state.is_admin: editor_sync("cost_base",costs,cols,"costs")
     else: st.dataframe(costs[cols] if len(costs) else costs,use_container_width=True,hide_index=True)
     if len(costs): st.metric("Συνολικό καταγεγραμμένο κόστος",euro(n(costs["amount"]).sum()))
 
-elif page=="Admin Workload":
+elif page=="Διοικητικός Φόρτος":
     st.subheader(page)
     cols=["role","process","frequency","cases_per_month","minutes_per_case","system_file","duplicate_entry","automation_potential","notes"]
     if st.session_state.is_admin: editor_sync("admin_workload",workload,cols,"workload")
@@ -201,7 +231,7 @@ elif page=="Admin Workload":
         st.metric("Συνολικές διοικητικές ώρες/μήνα",f"{q['hours_per_month'].sum():.1f}")
         st.dataframe(q[["role","process","hours_per_month"]],use_container_width=True,hide_index=True)
 
-elif page=="Findings & Action Plan":
+elif page=="Ευρήματα & Σχέδιο Δράσης":
     st.subheader(page)
     cols=["finding_code","area","finding","evidence_source","root_cause","impact","priority",
           "proposed_action","owner","horizon","status","success_kpi","due_date"]
@@ -210,7 +240,7 @@ elif page=="Findings & Action Plan":
     if len(findings):
         st.bar_chart(findings["priority"].fillna("Χωρίς προτεραιότητα").value_counts())
 
-elif page=="Data Request Room":
+elif page=="Συλλογή Στοιχείων":
     st.subheader(page)
     if not len(requests):
         st.info("Δεν υπάρχουν στοιχεία checklist.")
@@ -276,7 +306,7 @@ Marketing funnel, portfolio strategy, συνεργασίες, corporate training
 25–30: Σύνθεση, προτεραιοποίηση και quick wins
 """)
 
-elif page=="Backup / Export":
+elif page=="Αντίγραφα & Εξαγωγές":
     st.subheader(page)
     tables={"cash_bridge":cash,"programs":programs,"cost_base":costs,"admin_workload":workload,
             "findings_actions":findings,"data_requests":requests}
