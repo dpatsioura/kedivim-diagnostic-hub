@@ -87,6 +87,23 @@ def eur(x):
     try:return f"{float(x):,.0f} €".replace(",",".")
     except:return "0 €"
 
+def show_save_error(exc):
+    msg=str(exc)
+    if "duplicate key" in msg.lower() or "unique" in msg.lower():
+        st.error("Υπάρχει ήδη εγγραφή με αυτά τα μοναδικά στοιχεία. Τα δεδομένα σου παραμένουν στη φόρμα.")
+    else:
+        st.error("Η αποθήκευση δεν ολοκληρώθηκε. Τα δεδομένα σου παραμένουν στη φόρμα για να τα διορθώσεις ή να ξαναπροσπαθήσεις.")
+
+def reset_keys(keys):
+    for k in keys:
+        st.session_state.pop(k, None)
+
+def toast_saved(message="Η εγγραφή καταχωρήθηκε επιτυχώς."):
+    st.session_state["_saved_toast"]=message
+
+if st.session_state.pop("_saved_toast",None):
+    st.toast("✓ Η εγγραφή καταχωρήθηκε επιτυχώς.", icon="✅")
+
 st.markdown("""
 <style>
 .block-container{padding-top:1rem;max-width:1450px}
@@ -163,26 +180,37 @@ elif page=="Προγράμματα":
     st.caption("Μητρώο προγραμμάτων και κύκλων")
     if st.session_state.admin:
         with st.expander("➕ Νέο πρόγραμμα / κύκλος",expanded=False):
-            with st.form("new_program",clear_on_submit=True):
-                title=st.text_input("Τίτλος προγράμματος *")
+            st.caption("Οι τιμές παραμένουν στη φόρμα μέχρι να πατήσεις Αποθήκευση.")
+            with st.form("new_program",clear_on_submit=False,enter_to_submit=False):
+                title=st.text_input("Τίτλος προγράμματος *",key="np_title")
                 c1,c2,c3=st.columns(3)
-                year=c1.number_input("Έτος",2000,2100,2026); code=c2.text_input("Κωδικός"); status=c3.selectbox("Status",["planned","active","completed","paused","cancelled"])
-                lead=st.text_input("Επιστημονικός Υπεύθυνος")
+                year=c1.number_input("Έτος",2000,2100,2026,key="np_year")
+                code=c2.text_input("Κωδικός",key="np_code")
+                status=c3.selectbox("Status",["planned","active","completed","paused","cancelled"],key="np_status")
+                lead=st.text_input("Επιστημονικός Υπεύθυνος",key="np_lead")
                 c1,c2,c3=st.columns(3)
-                apps=c1.number_input("Αιτήσεις",min_value=0); enr=c2.number_input("Εγγραφές",min_value=0); comp=c3.number_input("Ολοκλήρωσαν",min_value=0)
+                apps=c1.number_input("Αιτήσεις",min_value=0,key="np_apps")
+                enr=c2.number_input("Εγγραφές",min_value=0,key="np_enr")
+                comp=c3.number_input("Ολοκλήρωσαν",min_value=0,key="np_comp")
                 c1,c2=st.columns(2)
-                fee=c1.number_input("Μέσο πραγματικό δίδακτρο (€)",min_value=0.0); trainer=c2.number_input("Αμοιβές εκπαιδευτών (€)",min_value=0.0)
-                notes=st.text_area("Σημειώσεις")
-                new_files=upload_new_record_files("📎 Επισύναψη αρχείων προγράμματος","new_program_files")
-                if st.form_submit_button("Αποθήκευση",type="primary"):
-                    if not title.strip():st.error("Ο τίτλος είναι υποχρεωτικός.")
-                    else:
+                fee=c1.number_input("Μέσο πραγματικό δίδακτρο (€)",min_value=0.0,key="np_fee")
+                trainer=c2.number_input("Αμοιβές εκπαιδευτών (€)",min_value=0.0,key="np_trainer")
+                notes=st.text_area("Σημειώσεις",key="np_notes")
+                new_files=upload_new_record_files("📎 Επισύναψη αρχείων προγράμματος","np_files")
+                submitted=st.form_submit_button("💾 Αποθήκευση",type="primary")
+            if submitted:
+                if not title.strip():
+                    st.error("Ο τίτλος είναι υποχρεωτικός. Τα υπόλοιπα στοιχεία παραμένουν στη φόρμα.")
+                else:
+                    try:
                         res=sb.table("programs").insert({"program_name":title.strip(),"year":year,"code":code or None,"status":status,
                           "scientific_lead":lead or None,"applications":apps,"enrollments":enr,"completed":comp,
                           "actual_avg_tuition":fee,"trainer_fees":trainer,"notes":notes or None}).execute()
                         rid=res.data[0]["id"]
                         for f in (new_files or []): attachment_upload("program",rid,f)
-                        st.success("Το πρόγραμμα και τα συνημμένα αποθηκεύτηκαν.");st.rerun()
+                        reset_keys(["np_title","np_year","np_code","np_status","np_lead","np_apps","np_enr","np_comp","np_fee","np_trainer","np_notes","np_files"])
+                        toast_saved(); st.rerun()
+                    except Exception as exc: show_save_error(exc)
     search=st.text_input("Αναζήτηση προγράμματος")
     q=programs.copy()
     if search and len(q):
@@ -195,7 +223,7 @@ elif page=="Προγράμματα":
                 c3.metric("Ολοκλήρωσαν",int(r.get("completed") or 0));c4.metric("Revenue",eur((r.get("enrollments") or 0)*(r.get("actual_avg_tuition") or 0)))
                 st.write("Επιστημονικός Υπεύθυνος:",r.get("scientific_lead") or "—")
                 if st.session_state.admin:
-                    with st.form("edit_"+str(r["id"])):
+                    with st.form("edit_"+str(r["id"]),enter_to_submit=False):
                         etitle=st.text_input("Τίτλος",value=str(r.get("program_name") or ""))
                         elead=st.text_input("Επιστημονικός Υπεύθυνος",value=str(r.get("scientific_lead") or ""))
                         e1,e2,e3=st.columns(3)
@@ -221,25 +249,43 @@ elif page=="Οικονομικά":
     with tab1:
         if st.session_state.admin:
             with st.expander("➕ Νέα ετήσια οικονομική εγγραφή"):
-                with st.form("cash_new",clear_on_submit=True):
-                    year=st.number_input("Έτος",2000,2100,2026,key="cy")
-                    c1,c2=st.columns(2); opening=c1.number_input("Αρχικό διαθέσιμο (€)"); revenue=c2.number_input("Έσοδα (€)")
-                    c1,c2=st.columns(2); payroll=c1.number_input("Μισθοδοσία / Διοίκηση (€)"); direct=c2.number_input("Άμεσα κόστη προγραμμάτων (€)")
-                    c1,c2=st.columns(2); op=c1.number_input("Marketing / IT / Λειτουργικά (€)"); other=c2.number_input("Λοιπές εκροές (€)")
-                    new_files=upload_new_record_files("📎 Επισύναψη αρχείων οικονομικής εγγραφής","new_cash_files")
-                    if st.form_submit_button("Αποθήκευση",type="primary"):
-                        res=sb.table("cash_bridge").insert({"year":year,"opening_cash":opening,"revenue":revenue,"payroll_admin":payroll,
-                          "direct_program_costs":direct,"marketing_it_operating":op,"other_outflows":other}).execute()
-                        rid=res.data[0]["id"]
+                st.caption("Το Enter αλλάζει πεδίο/οριστικοποιεί την τιμή, δεν αποθηκεύει τη φόρμα.")
+                with st.form("cash_new",clear_on_submit=False,enter_to_submit=False):
+                    year=st.number_input("Έτος",2000,2100,2026,key="cf_year")
+                    c1,c2=st.columns(2)
+                    opening=c1.number_input("Αρχικό διαθέσιμο (€)",key="cf_open")
+                    revenue=c2.number_input("Έσοδα (€)",key="cf_rev")
+                    c1,c2=st.columns(2)
+                    payroll=c1.number_input("Μισθοδοσία / Διοίκηση (€)",key="cf_payroll")
+                    direct=c2.number_input("Άμεσα κόστη προγραμμάτων (€)",key="cf_direct")
+                    c1,c2=st.columns(2)
+                    op=c1.number_input("Marketing / IT / Λειτουργικά (€)",key="cf_op")
+                    other=c2.number_input("Λοιπές εκροές (€)",key="cf_other")
+                    new_files=upload_new_record_files("📎 Επισύναψη αρχείων οικονομικής εγγραφής","cf_files")
+                    submitted=st.form_submit_button("💾 Αποθήκευση",type="primary")
+                if submitted:
+                    try:
+                        payload={"year":year,"opening_cash":opening,"revenue":revenue,"payroll_admin":payroll,
+                                 "direct_program_costs":direct,"marketing_it_operating":op,"other_outflows":other,
+                                 "deleted_at":None,"deleted_by":None}
+                        existing=sb.table("cash_bridge").select("id").eq("year",year).limit(1).execute().data or []
+                        if existing:
+                            rid=existing[0]["id"]
+                            sb.table("cash_bridge").update(payload).eq("id",rid).execute()
+                        else:
+                            res=sb.table("cash_bridge").insert(payload).execute()
+                            rid=res.data[0]["id"]
                         for f in (new_files or []): attachment_upload("cash",rid,f)
-                        st.success("Η οικονομική εγγραφή αποθηκεύτηκε.");st.rerun()
+                        reset_keys(["cf_year","cf_open","cf_rev","cf_payroll","cf_direct","cf_op","cf_other","cf_files"])
+                        toast_saved(); st.rerun()
+                    except Exception as exc: show_save_error(exc)
         if len(cash):
             for _,r in cash.sort_values("year",ascending=False).iterrows():
                 out=sum(float(r.get(c) or 0) for c in ["payroll_admin","direct_program_costs","marketing_it_operating","other_outflows"])
                 with st.expander(f"💰 {int(r['year'])} · Έσοδα {eur(r.get('revenue',0))}"):
                     a,b,c=st.columns(3);a.metric("Έσοδα",eur(r.get("revenue",0)));b.metric("Εκροές",eur(out));c.metric("Net",eur(float(r.get("revenue") or 0)-out))
                     if st.session_state.admin:
-                        with st.form("editcash_"+str(r["id"])):
+                        with st.form("editcash_"+str(r["id"]),enter_to_submit=False):
                             c1,c2=st.columns(2)
                             erev=c1.number_input("Έσοδα (€)",value=float(r.get("revenue") or 0),key="rev_"+str(r["id"]))
                             eopen=c2.number_input("Αρχικό διαθέσιμο (€)",value=float(r.get("opening_cash") or 0),key="open_"+str(r["id"]))
@@ -251,21 +297,31 @@ elif page=="Οικονομικά":
     with tab2:
         if st.session_state.admin:
             with st.expander("➕ Νέο έξοδο"):
-                with st.form("cost_new",clear_on_submit=True):
-                    desc=st.text_input("Περιγραφή *");c1,c2,c3=st.columns(3)
-                    year=c1.number_input("Έτος",2000,2100,2026,key="costyear");cat=c2.text_input("Κατηγορία");amount=c3.number_input("Ποσό (€)",min_value=0.0)
-                    new_files=upload_new_record_files("📎 Επισύναψη παραστατικών / αρχείων","new_cost_files")
-                    if st.form_submit_button("Αποθήκευση εξόδου",type="primary"):
-                        if desc.strip():
+                st.caption("Η φόρμα καθαρίζει μόνο μετά από επιτυχημένη αποθήκευση.")
+                with st.form("cost_new",clear_on_submit=False,enter_to_submit=False):
+                    desc=st.text_input("Περιγραφή *",key="ce_desc")
+                    c1,c2,c3=st.columns(3)
+                    year=c1.number_input("Έτος",2000,2100,2026,key="ce_year")
+                    cat=c2.text_input("Κατηγορία",key="ce_cat")
+                    amount=c3.number_input("Ποσό (€)",min_value=0.0,key="ce_amount")
+                    new_files=upload_new_record_files("📎 Επισύναψη παραστατικών / αρχείων","ce_files")
+                    submitted=st.form_submit_button("💾 Αποθήκευση εξόδου",type="primary")
+                if submitted:
+                    if not desc.strip():
+                        st.error("Η περιγραφή είναι υποχρεωτική. Τα υπόλοιπα στοιχεία παραμένουν.")
+                    else:
+                        try:
                             res=sb.table("cost_base").insert({"description":desc,"year":year,"category":cat or None,"amount":amount}).execute()
                             rid=res.data[0]["id"]
                             for f in (new_files or []): attachment_upload("cost",rid,f)
-                            st.success("Το έξοδο και τα συνημμένα αποθηκεύτηκαν.");st.rerun()
+                            reset_keys(["ce_desc","ce_year","ce_cat","ce_amount","ce_files"])
+                            toast_saved("Το έξοδο καταχωρήθηκε επιτυχώς."); st.rerun()
+                        except Exception as exc: show_save_error(exc)
         if len(costs):
             for _,r in costs.sort_values("year",ascending=False).iterrows():
                 with st.expander(f"💶 {r.get('description','')} · {eur(r.get('amount',0))} · {r.get('category') or '—'}"):
                     if st.session_state.admin:
-                        with st.form("editcost_"+str(r["id"])):
+                        with st.form("editcost_"+str(r["id"]),enter_to_submit=False):
                             c1,c2=st.columns(2)
                             edesc=c1.text_input("Περιγραφή",value=str(r.get("description") or ""))
                             ecat=c2.text_input("Κατηγορία",value=str(r.get("category") or ""))
@@ -280,17 +336,28 @@ elif page=="Monitoring":
     st.caption("Εκκρεμότητες, actions και deadlines")
     if st.session_state.admin:
         with st.expander("➕ Νέα εκκρεμότητα"):
-            with st.form("new_action",clear_on_submit=True):
-                finding=st.text_input("Θέμα *");action=st.text_area("Action")
-                c1,c2,c3=st.columns(3);priority=c1.selectbox("Priority",["P1","P2","P3"]);owner=c2.text_input("Responsible");due=c3.date_input("Deadline",value=None)
-                new_files=upload_new_record_files("📎 Επισύναψη τεκμηρίωσης","new_monitoring_files")
-                if st.form_submit_button("Αποθήκευση",type="primary"):
-                    if finding.strip():
+            st.caption("Τα στοιχεία παραμένουν μέχρι να πατήσεις Αποθήκευση.")
+            with st.form("new_action",clear_on_submit=False,enter_to_submit=False):
+                finding=st.text_input("Θέμα *",key="mo_finding")
+                action=st.text_area("Action",key="mo_action")
+                c1,c2,c3=st.columns(3)
+                priority=c1.selectbox("Priority",["P1","P2","P3"],key="mo_priority")
+                owner=c2.text_input("Responsible",key="mo_owner")
+                due=c3.date_input("Deadline",value=None,key="mo_due")
+                new_files=upload_new_record_files("📎 Επισύναψη τεκμηρίωσης","mo_files")
+                submitted=st.form_submit_button("💾 Αποθήκευση",type="primary")
+            if submitted:
+                if not finding.strip():
+                    st.error("Το θέμα είναι υποχρεωτικό. Τα υπόλοιπα στοιχεία παραμένουν.")
+                else:
+                    try:
                         res=sb.table("findings_actions").insert({"finding":finding,"proposed_action":action or None,"priority":priority,
                           "owner":owner or None,"due_date":due.isoformat() if due else None,"status":"Open"}).execute()
                         rid=res.data[0]["id"]
                         for f in (new_files or []): attachment_upload("monitoring",rid,f)
-                        st.success("Η εκκρεμότητα και τα συνημμένα αποθηκεύτηκαν.");st.rerun()
+                        reset_keys(["mo_finding","mo_action","mo_priority","mo_owner","mo_due","mo_files"])
+                        toast_saved(); st.rerun()
+                    except Exception as exc: show_save_error(exc)
     if len(findings):
         filt=st.selectbox("Filter",["Όλα","Open","In progress","Done"])
         q=findings if filt=="Όλα" else findings[findings["status"]==filt]

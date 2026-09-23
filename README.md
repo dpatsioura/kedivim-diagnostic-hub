@@ -1,14 +1,15 @@
-# ΚΕΔΙΒΙΜ · Diagnostic Hub — CLEAN V3 FINAL
+# ΚΕΔΙΒΙΜ · Diagnostic Hub — FINAL UX
 
-Finalized workflow:
-- visible multi-file upload during NEW record creation
-- PDF/JPG/JPEG/PNG attachments for Programs, Cash Flow, Expenses, Monitoring
-- attachment viewing and individual deletion after save
-- edit saved records
-- soft delete to Trash
-- restore
-- permanent deletion one-by-one
-- Empty Trash
+Changes in this build:
+- All NEW-entry forms preserve entered values until explicit Save.
+- Enter does not submit forms.
+- Forms reset only after a successful database save.
+- Failed saves keep the draft values and show a friendly error.
+- Successful saves show a toast notification.
+- Cash Flow year conflict is handled as update/upsert behavior rather than crashing on the unique year constraint.
+- Existing attachments, edit, trash, restore and permanent-delete functionality remains.
 
-Run `SUPABASE_UPGRADE_CLEAN_V2.sql` once if you have not already run it.
-No new Streamlit Secrets are required.
+Database prerequisite:
+Run `SUPABASE_UPGRADE_CLEAN_V2.sql` once if it has not already been run.
+
+No new secrets are required.
