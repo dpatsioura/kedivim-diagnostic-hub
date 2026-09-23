@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import io
+import uuid
+from datetime import datetime, timezone
 from supabase import create_client
 
 st.set_page_config(page_title="ΚΕΔΙΒΙΜ · Diagnostic Hub", page_icon="📊", layout="wide")
@@ -14,10 +16,61 @@ sb=db()
 ADMIN_EMAIL="dpatsioura@gmail.com"
 if "admin" not in st.session_state: st.session_state.admin=False
 
-def get(table, order=None):
+def get(table, order=None, include_deleted=False):
     q=sb.table(table).select("*")
+    if not include_deleted:
+        q=q.is_("deleted_at","null")
     if order:q=q.order(order)
     return pd.DataFrame(q.execute().data or [])
+
+def soft_delete(table, row_id):
+    sb.table(table).update({"deleted_at":datetime.now(timezone.utc).isoformat(),"deleted_by":ADMIN_EMAIL}).eq("id",row_id).execute()
+
+def restore_row(table, row_id):
+    sb.table(table).update({"deleted_at":None,"deleted_by":None}).eq("id",row_id).execute()
+
+def attachment_upload(entity_type, entity_id, uploaded):
+    ext=Path(uploaded.name).suffix.lower()
+    safe=f"{uuid.uuid4().hex}{ext}"
+    path=f"{entity_type}/{entity_id}/{safe}"
+    data=uploaded.getvalue()
+    sb.storage.from_("kedivim-attachments").upload(path,data,{"content-type":uploaded.type or "application/octet-stream"})
+    sb.table("attachments").insert({"entity_type":entity_type,"entity_id":entity_id,
+        "file_name":uploaded.name,"storage_path":path,"mime_type":uploaded.type,
+        "file_size":len(data),"uploaded_by":ADMIN_EMAIL}).execute()
+
+def list_attachments(entity_type, entity_id):
+    return pd.DataFrame(sb.table("attachments").select("*").eq("entity_type",entity_type).eq("entity_id",entity_id).execute().data or [])
+
+def signed_attachment(path):
+    r=sb.storage.from_("kedivim-attachments").create_signed_url(path,3600)
+    return r.get("signedURL") or r.get("signedUrl")
+
+def delete_attachment(att_id, path):
+    sb.storage.from_("kedivim-attachments").remove([path])
+    sb.table("attachments").delete().eq("id",att_id).execute()
+
+def purge_row(table, entity_type, row_id):
+    ats=list_attachments(entity_type,row_id)
+    for _,a in ats.iterrows(): delete_attachment(a["id"],a["storage_path"])
+    sb.table(table).delete().eq("id",row_id).execute()
+
+def attachment_panel(entity_type, entity_id, key):
+    ats=list_attachments(entity_type,entity_id)
+    if len(ats):
+        st.caption("Συνημμένα")
+        for _,a in ats.iterrows():
+            c1,c2,c3=st.columns([5,1,1])
+            c1.write("📎 "+str(a["file_name"]))
+            try:
+                c2.link_button("Άνοιγμα",signed_attachment(a["storage_path"]))
+            except: c2.write("—")
+            if st.session_state.admin and c3.button("✕",key=f"attdel_{key}_{a['id']}"):
+                delete_attachment(a["id"],a["storage_path"]); st.rerun()
+    if st.session_state.admin:
+        f=st.file_uploader("Προσθήκη αρχείου",type=["pdf","jpg","jpeg","png"],key=f"upload_{key}")
+        if f is not None and st.button("Upload",key=f"upbtn_{key}"):
+            attachment_upload(entity_type,entity_id,f); st.success("Το αρχείο ανέβηκε."); st.rerun()
 
 def num(x): return pd.to_numeric(x,errors="coerce").fillna(0)
 def eur(x):
@@ -136,6 +189,10 @@ elif page=="Προγράμματα":
                         estat=st.selectbox("Status",["planned","active","completed","paused","cancelled"],index=["planned","active","completed","paused","cancelled"].index(r.get("status")) if r.get("status") in ["planned","active","completed","paused","cancelled"] else 0)
                         if st.form_submit_button("Αποθήκευση αλλαγών"):
                             sb.table("programs").update({"enrollments":eenr,"actual_avg_tuition":efee,"status":estat}).eq("id",r["id"]).execute();st.rerun()
+                attachment_panel("program",r["id"],"program_"+str(r["id"]))
+                if st.session_state.admin:
+                    if st.button("🗑️ Μεταφορά στον Κάδο",key="trash_program_"+str(r["id"])):
+                        soft_delete("programs",r["id"]);st.rerun()
 
 elif page=="Οικονομικά":
     st.caption("Έσοδα, έξοδα και οικονομική εικόνα")
@@ -156,6 +213,16 @@ elif page=="Οικονομικά":
                 out=sum(float(r.get(c) or 0) for c in ["payroll_admin","direct_program_costs","marketing_it_operating","other_outflows"])
                 with st.expander(f"💰 {int(r['year'])} · Έσοδα {eur(r.get('revenue',0))}"):
                     a,b,c=st.columns(3);a.metric("Έσοδα",eur(r.get("revenue",0)));b.metric("Εκροές",eur(out));c.metric("Net",eur(float(r.get("revenue") or 0)-out))
+                    if st.session_state.admin:
+                        with st.form("editcash_"+str(r["id"])):
+                            c1,c2=st.columns(2)
+                            erev=c1.number_input("Έσοδα (€)",value=float(r.get("revenue") or 0),key="rev_"+str(r["id"]))
+                            eopen=c2.number_input("Αρχικό διαθέσιμο (€)",value=float(r.get("opening_cash") or 0),key="open_"+str(r["id"]))
+                            if st.form_submit_button("Αποθήκευση αλλαγών"):
+                                sb.table("cash_bridge").update({"revenue":erev,"opening_cash":eopen}).eq("id",r["id"]).execute();st.rerun()
+                    attachment_panel("cash",r["id"],"cash_"+str(r["id"]))
+                    if st.session_state.admin and st.button("🗑️ Μεταφορά στον Κάδο",key="trash_cash_"+str(r["id"])):
+                        soft_delete("cash_bridge",r["id"]);st.rerun()
     with tab2:
         if st.session_state.admin:
             with st.expander("➕ Νέο έξοδο"):
@@ -167,7 +234,18 @@ elif page=="Οικονομικά":
                             sb.table("cost_base").insert({"description":desc,"year":year,"category":cat or None,"amount":amount}).execute();st.rerun()
         if len(costs):
             for _,r in costs.sort_values("year",ascending=False).iterrows():
-                st.write(f"💶 {r.get('description','')} · {eur(r.get('amount',0))} · {r.get('category') or '—'}")
+                with st.expander(f"💶 {r.get('description','')} · {eur(r.get('amount',0))} · {r.get('category') or '—'}"):
+                    if st.session_state.admin:
+                        with st.form("editcost_"+str(r["id"])):
+                            c1,c2=st.columns(2)
+                            edesc=c1.text_input("Περιγραφή",value=str(r.get("description") or ""))
+                            ecat=c2.text_input("Κατηγορία",value=str(r.get("category") or ""))
+                            eamount=st.number_input("Ποσό (€)",min_value=0.0,value=float(r.get("amount") or 0),key="amt_"+str(r["id"]))
+                            if st.form_submit_button("Αποθήκευση αλλαγών"):
+                                sb.table("cost_base").update({"description":edesc,"category":ecat or None,"amount":eamount}).eq("id",r["id"]).execute();st.rerun()
+                    attachment_panel("cost",r["id"],"cost_"+str(r["id"]))
+                    if st.session_state.admin and st.button("🗑️ Μεταφορά στον Κάδο",key="trash_cost_"+str(r["id"])):
+                        soft_delete("cost_base",r["id"]);st.rerun()
 
 elif page=="Monitoring":
     st.caption("Εκκρεμότητες, actions και deadlines")
@@ -191,6 +269,9 @@ elif page=="Monitoring":
                     status=st.selectbox("Status",["Open","In progress","Done"],index=["Open","In progress","Done"].index(r.get("status")) if r.get("status") in ["Open","In progress","Done"] else 0,key="s"+str(r["id"]))
                     if st.button("Update",key="u"+str(r["id"])):
                         sb.table("findings_actions").update({"status":status}).eq("id",r["id"]).execute();st.rerun()
+                attachment_panel("monitoring",r["id"],"mon_"+str(r["id"]))
+                if st.session_state.admin and st.button("🗑️ Μεταφορά στον Κάδο",key="trash_mon_"+str(r["id"])):
+                    soft_delete("findings_actions",r["id"]);st.rerun()
 
 elif page=="Reports":
     st.caption("Εξαγωγές και αντίγραφα δεδομένων")
@@ -204,7 +285,55 @@ elif page=="Reports":
     st.info("Τα PDF executive reports θα προστεθούν όταν υπάρχουν αρκετά πραγματικά δεδομένα για ουσιαστική αναφορά.")
 
 elif page=="Ρυθμίσεις":
-    st.caption("Κατάσταση συστήματος")
+    st.caption("Κατάσταση συστήματος και Κάδος")
     st.success("Supabase: συνδεδεμένο")
     st.write("Mode:", "Admin" if st.session_state.admin else "Read only")
-    st.write("Η εφαρμογή χρησιμοποιεί το υπάρχον Supabase project και τα Streamlit Secrets.")
+
+    st.subheader("🗑️ Κάδος")
+    if not st.session_state.admin:
+        st.info("Ο Κάδος είναι διαθέσιμος μόνο στον Admin.")
+    else:
+        configs=[
+            ("Προγράμματα","programs","program","program_name"),
+            ("Cash Flow","cash_bridge","cash","year"),
+            ("Έξοδα","cost_base","cost","description"),
+            ("Monitoring","findings_actions","monitoring","finding"),
+        ]
+        trashed=[]
+        for label,table,etype,titlecol in configs:
+            df=get(table,include_deleted=True)
+            if len(df) and "deleted_at" in df:
+                df=df[df["deleted_at"].notna()]
+                for _,r in df.iterrows():
+                    trashed.append((label,table,etype,titlecol,r))
+        if not trashed:
+            st.info("Ο Κάδος είναι άδειος.")
+        else:
+            st.warning(f"{len(trashed)} διαγραμμένες εγγραφές.")
+            if st.button("⚠️ Άδειασμα Κάδου",type="secondary"):
+                st.session_state["confirm_empty_trash"]=True
+            if st.session_state.get("confirm_empty_trash"):
+                st.error("Η ενέργεια είναι οριστική και διαγράφει και τα συνημμένα.")
+                c1,c2=st.columns(2)
+                if c1.button("Ναι, οριστική διαγραφή όλων"):
+                    for _,table,etype,_,r in trashed: purge_row(table,etype,r["id"])
+                    st.session_state["confirm_empty_trash"]=False;st.rerun()
+                if c2.button("Ακύρωση"):
+                    st.session_state["confirm_empty_trash"]=False;st.rerun()
+
+            for label,table,etype,titlecol,r in trashed:
+                title=str(r.get(titlecol) or "Χωρίς τίτλο")
+                with st.expander(f"{label} · {title}"):
+                    st.caption(f"Διαγράφηκε: {r.get('deleted_at')}")
+                    c1,c2=st.columns(2)
+                    if c1.button("↩️ Επαναφορά",key="restore_"+str(r["id"])):
+                        restore_row(table,r["id"]);st.rerun()
+                    if c2.button("❌ Οριστική διαγραφή",key="purge_"+str(r["id"])):
+                        st.session_state["purge_id"]=str(r["id"])
+                    if st.session_state.get("purge_id")==str(r["id"]):
+                        st.error("Να διαγραφεί οριστικά η εγγραφή και τα συνημμένα της;")
+                        a,b=st.columns(2)
+                        if a.button("Επιβεβαίωση",key="yes_"+str(r["id"])):
+                            purge_row(table,etype,r["id"]);st.session_state.pop("purge_id",None);st.rerun()
+                        if b.button("Ακύρωση",key="no_"+str(r["id"])):
+                            st.session_state.pop("purge_id",None);st.rerun()
