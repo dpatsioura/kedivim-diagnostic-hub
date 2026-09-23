@@ -140,28 +140,68 @@ try:
     cash=get("cash_bridge","year")
     costs=get("cost_base","year")
     findings=get("findings_actions")
+    transactions=get("financial_transactions","transaction_date")
 except Exception as e:
-    st.error("Δεν ήταν δυνατή η σύνδεση με τη βάση.")
+    st.error("Δεν ήταν δυνατή η φόρτωση της βάσης. Αν μόλις αναβάθμισες την εφαρμογή, τρέξε πρώτα το SUPABASE_FINANCIAL_UPGRADE.sql.")
     st.stop()
+
+
+def tx_amounts(df):
+    if df is None or len(df)==0:
+        return 0.0,0.0
+    inc=pd.to_numeric(df.loc[df["transaction_type"]=="income","amount"],errors="coerce").fillna(0).sum()
+    exp=pd.to_numeric(df.loc[df["transaction_type"]=="expense","amount"],errors="coerce").fillna(0).sum()
+    return float(inc),float(exp)
+
+def program_name_map():
+    if len(programs)==0:return {}
+    return {str(r["id"]):str(r.get("program_name") or "Χωρίς τίτλο") for _,r in programs.iterrows()}
+
+def active_years():
+    ys=set()
+    if len(transactions) and "transaction_date" in transactions:
+        for x in pd.to_datetime(transactions["transaction_date"],errors="coerce").dropna():
+            ys.add(int(x.year))
+    if len(cash) and "year" in cash:
+        for y in pd.to_numeric(cash["year"],errors="coerce").dropna(): ys.add(int(y))
+    ys.add(datetime.now().year)
+    return sorted(ys, reverse=True)
 
 st.title("ΚΕΔΙΒΙΜ · Diagnostic Hub")
 
 if page=="Dashboard":
-    st.caption("Συνοπτική εικόνα δραστηριότητας και οικονομικής πορείας")
-    revenue=num(cash["revenue"]).sum() if len(cash) else 0
-    cash_out=sum(num(cash[c]).sum() for c in ["payroll_admin","direct_program_costs","marketing_it_operating","other_outflows"] if c in cash) if len(cash) else 0
-    extra_cost=num(costs["amount"]).sum() if len(costs) else 0
+    st.caption("Συνοπτική εικόνα δραστηριότητας, οικονομικής πορείας και εκκρεμοτήτων")
+    years=active_years()
+    selected_year=st.selectbox("Έτος Dashboard",years,key="dash_year")
+    tx=transactions.copy()
+    if len(tx):
+        tx["_date"]=pd.to_datetime(tx["transaction_date"],errors="coerce")
+        tx=tx[tx["_date"].dt.year==selected_year]
+    revenue, expenses=tx_amounts(tx)
+    opening=0.0
+    if len(cash):
+        cr=cash[pd.to_numeric(cash["year"],errors="coerce")==selected_year]
+        if len(cr): opening=float(cr.iloc[0].get("opening_cash") or 0)
+    current_cash=opening+revenue-expenses
     enroll=num(programs["enrollments"]).sum() if len(programs) else 0
     open_actions=len(findings[~findings["status"].fillna("").str.lower().isin(["done","ολοκληρώθηκε"])]) if len(findings) else 0
     a,b,c,d,e=st.columns(5)
-    a.metric("Προγράμματα",len(programs)); b.metric("Εγγραφές",int(enroll))
-    c.metric("Έσοδα",eur(revenue)); d.metric("Έξοδα",eur(cash_out+extra_cost)); e.metric("Καθαρό αποτέλεσμα",eur(revenue-cash_out-extra_cost))
-    if len(cash):
-        q=cash.copy()
-        q["Έσοδα"]=num(q["revenue"])
-        q["Έξοδα"]=sum((num(q[c]) for c in ["payroll_admin","direct_program_costs","marketing_it_operating","other_outflows"]),start=pd.Series(0,index=q.index))
+    a.metric("Προγράμματα",len(programs))
+    b.metric("Εγγραφές",int(enroll))
+    c.metric("Εισπράξεις",eur(revenue))
+    d.metric("Πληρωμές",eur(expenses))
+    e.metric("Τρέχον διαθέσιμο",eur(current_cash))
+    st.caption(f"Αρχικό διαθέσιμο {selected_year}: {eur(opening)} · Καθαρή μεταβολή: {eur(revenue-expenses)}")
+
+    if len(tx):
+        chart=tx.copy()
+        chart["Μήνας"]=chart["_date"].dt.to_period("M").astype(str)
+        chart["Έσοδα"]=chart.apply(lambda r: float(r["amount"]) if r["transaction_type"]=="income" else 0,axis=1)
+        chart["Έξοδα"]=chart.apply(lambda r: float(r["amount"]) if r["transaction_type"]=="expense" else 0,axis=1)
+        monthly=chart.groupby("Μήνας")[["Έσοδα","Έξοδα"]].sum()
         st.subheader("Οικονομική πορεία")
-        st.bar_chart(q.set_index("year")[["Έσοδα","Έξοδα"]])
+        st.bar_chart(monthly)
+
     c1,c2=st.columns(2)
     with c1:
         st.subheader("Πρόσφατα προγράμματα")
@@ -193,8 +233,12 @@ elif page=="Προγράμματα":
                 enr=c2.number_input("Εγγραφές",min_value=0,key="np_enr")
                 comp=c3.number_input("Ολοκλήρωσαν",min_value=0,key="np_comp")
                 c1,c2=st.columns(2)
-                fee=c1.number_input("Μέσο πραγματικό δίδακτρο (€)",min_value=0.0,key="np_fee")
-                trainer=c2.number_input("Αμοιβές εκπαιδευτών (€)",min_value=0.0,key="np_trainer")
+                nominal=c1.number_input("Ονομαστικό δίδακτρο (€)",min_value=0.0,key="np_nominal")
+                fee=c2.number_input("Μέσο πραγματικό δίδακτρο (€)",min_value=0.0,key="np_fee")
+                c1,c2,c3=st.columns(3)
+                budget_rev=c1.number_input("Budget εσόδων (€)",min_value=0.0,key="np_budget_rev")
+                budget_exp=c2.number_input("Budget εξόδων (€)",min_value=0.0,key="np_budget_exp")
+                trainer=c3.number_input("Προϋπ. αμοιβές εκπαιδευτών (€)",min_value=0.0,key="np_trainer")
                 notes=st.text_area("Σημειώσεις",key="np_notes")
                 new_files=upload_new_record_files("📎 Επισύναψη αρχείων προγράμματος","np_files")
                 submitted=st.form_submit_button("💾 Αποθήκευση",type="primary")
@@ -205,10 +249,11 @@ elif page=="Προγράμματα":
                     try:
                         res=sb.table("programs").insert({"program_name":title.strip(),"year":year,"code":code or None,"status":status,
                           "scientific_lead":lead or None,"applications":apps,"enrollments":enr,"completed":comp,
-                          "actual_avg_tuition":fee,"trainer_fees":trainer,"notes":notes or None}).execute()
+                          "nominal_tuition":nominal,"actual_avg_tuition":fee,"budget_revenue":budget_rev,"budget_expenses":budget_exp,
+                          "trainer_fees":trainer,"notes":notes or None}).execute()
                         rid=res.data[0]["id"]
                         for f in (new_files or []): attachment_upload("program",rid,f)
-                        reset_keys(["np_title","np_year","np_code","np_status","np_lead","np_apps","np_enr","np_comp","np_fee","np_trainer","np_notes","np_files"])
+                        reset_keys(["np_title","np_year","np_code","np_status","np_lead","np_apps","np_enr","np_comp","np_nominal","np_fee","np_budget_rev","np_budget_exp","np_trainer","np_notes","np_files"])
                         toast_saved(); st.rerun()
                     except Exception as exc: show_save_error(exc)
     search=st.text_input("Αναζήτηση προγράμματος")
@@ -231,106 +276,196 @@ elif page=="Προγράμματα":
                         eenr=e2.number_input("Εγγραφές",min_value=0,value=int(r.get("enrollments") or 0))
                         ecomp=e3.number_input("Ολοκλήρωσαν",min_value=0,value=int(r.get("completed") or 0))
                         e1,e2=st.columns(2)
-                        efee=e1.number_input("Μέσο δίδακτρο (€)",min_value=0.0,value=float(r.get("actual_avg_tuition") or 0))
-                        etrainer=e2.number_input("Αμοιβές εκπαιδευτών (€)",min_value=0.0,value=float(r.get("trainer_fees") or 0))
+                        enominal=e1.number_input("Ονομαστικό δίδακτρο (€)",min_value=0.0,value=float(r.get("nominal_tuition") or 0))
+                        efee=e2.number_input("Μέσο πραγματικό δίδακτρο (€)",min_value=0.0,value=float(r.get("actual_avg_tuition") or 0))
+                        e1,e2,e3=st.columns(3)
+                        ebudgetrev=e1.number_input("Budget εσόδων (€)",min_value=0.0,value=float(r.get("budget_revenue") or 0))
+                        ebudgetexp=e2.number_input("Budget εξόδων (€)",min_value=0.0,value=float(r.get("budget_expenses") or 0))
+                        etrainer=e3.number_input("Προϋπ. αμοιβές εκπαιδευτών (€)",min_value=0.0,value=float(r.get("trainer_fees") or 0))
                         estat=st.selectbox("Status",["planned","active","completed","paused","cancelled"],index=["planned","active","completed","paused","cancelled"].index(r.get("status")) if r.get("status") in ["planned","active","completed","paused","cancelled"] else 0)
                         if st.form_submit_button("Αποθήκευση αλλαγών"):
                             sb.table("programs").update({"program_name":etitle,"scientific_lead":elead or None,
                               "applications":eapps,"enrollments":eenr,"completed":ecomp,
-                              "actual_avg_tuition":efee,"trainer_fees":etrainer,"status":estat}).eq("id",r["id"]).execute();st.rerun()
+                              "nominal_tuition":enominal,"actual_avg_tuition":efee,"budget_revenue":ebudgetrev,"budget_expenses":ebudgetexp,
+                              "trainer_fees":etrainer,"status":estat}).eq("id",r["id"]).execute();st.rerun()
                 attachment_panel("program",r["id"],"program_"+str(r["id"]))
                 if st.session_state.admin:
                     if st.button("🗑️ Μεταφορά στον Κάδο",key="trash_program_"+str(r["id"])):
                         soft_delete("programs",r["id"]);st.rerun()
 
 elif page=="Οικονομικά":
-    st.caption("Έσοδα, έξοδα και οικονομική εικόνα")
-    tab1,tab2=st.tabs(["Έσοδα / Cash Flow","Έξοδα"])
+    st.caption("Γενικό ταμείο ΚΕΔΙΒΙΜ και αναλυτική οικονομική καρτέλα ανά πρόγραμμα")
+    tab1,tab2,tab3,tab4=st.tabs(["Συνολική εικόνα","Κινήσεις","Ανά πρόγραμμα","Budget vs Actual"])
+
     with tab1:
-        if st.session_state.admin:
-            with st.expander("➕ Νέα ετήσια οικονομική εγγραφή"):
-                st.caption("Το Enter αλλάζει πεδίο/οριστικοποιεί την τιμή, δεν αποθηκεύει τη φόρμα.")
-                with st.form("cash_new",clear_on_submit=False,enter_to_submit=False):
-                    year=st.number_input("Έτος",2000,2100,2026,key="cf_year")
-                    c1,c2=st.columns(2)
-                    opening=c1.number_input("Αρχικό διαθέσιμο (€)",key="cf_open")
-                    revenue=c2.number_input("Έσοδα (€)",key="cf_rev")
-                    c1,c2=st.columns(2)
-                    payroll=c1.number_input("Μισθοδοσία / Διοίκηση (€)",key="cf_payroll")
-                    direct=c2.number_input("Άμεσα κόστη προγραμμάτων (€)",key="cf_direct")
-                    c1,c2=st.columns(2)
-                    op=c1.number_input("Marketing / IT / Λειτουργικά (€)",key="cf_op")
-                    other=c2.number_input("Λοιπές εκροές (€)",key="cf_other")
-                    new_files=upload_new_record_files("📎 Επισύναψη αρχείων οικονομικής εγγραφής","cf_files")
-                    submitted=st.form_submit_button("💾 Αποθήκευση",type="primary")
-                if submitted:
-                    try:
-                        payload={"year":year,"opening_cash":opening,"revenue":revenue,"payroll_admin":payroll,
-                                 "direct_program_costs":direct,"marketing_it_operating":op,"other_outflows":other,
-                                 "deleted_at":None,"deleted_by":None}
-                        existing=sb.table("cash_bridge").select("id").eq("year",year).limit(1).execute().data or []
-                        if existing:
-                            rid=existing[0]["id"]
-                            sb.table("cash_bridge").update(payload).eq("id",rid).execute()
-                        else:
-                            res=sb.table("cash_bridge").insert(payload).execute()
-                            rid=res.data[0]["id"]
-                        for f in (new_files or []): attachment_upload("cash",rid,f)
-                        reset_keys(["cf_year","cf_open","cf_rev","cf_payroll","cf_direct","cf_op","cf_other","cf_files"])
-                        toast_saved(); st.rerun()
-                    except Exception as exc: show_save_error(exc)
+        years=active_years()
+        fy=st.selectbox("Οικονομικό έτος",years,key="fin_year")
+        tx=transactions.copy()
+        if len(tx):
+            tx["_date"]=pd.to_datetime(tx["transaction_date"],errors="coerce")
+            tx=tx[tx["_date"].dt.year==fy]
+        inc,exp=tx_amounts(tx)
+        opening=0.0
         if len(cash):
-            for _,r in cash.sort_values("year",ascending=False).iterrows():
-                out=sum(float(r.get(c) or 0) for c in ["payroll_admin","direct_program_costs","marketing_it_operating","other_outflows"])
-                with st.expander(f"💰 {int(r['year'])} · Έσοδα {eur(r.get('revenue',0))}"):
-                    a,b,c=st.columns(3);a.metric("Έσοδα",eur(r.get("revenue",0)));b.metric("Εκροές",eur(out));c.metric("Net",eur(float(r.get("revenue") or 0)-out))
-                    if st.session_state.admin:
-                        with st.form("editcash_"+str(r["id"]),enter_to_submit=False):
-                            c1,c2=st.columns(2)
-                            erev=c1.number_input("Έσοδα (€)",value=float(r.get("revenue") or 0),key="rev_"+str(r["id"]))
-                            eopen=c2.number_input("Αρχικό διαθέσιμο (€)",value=float(r.get("opening_cash") or 0),key="open_"+str(r["id"]))
-                            if st.form_submit_button("Αποθήκευση αλλαγών"):
-                                sb.table("cash_bridge").update({"revenue":erev,"opening_cash":eopen}).eq("id",r["id"]).execute();st.rerun()
-                    attachment_panel("cash",r["id"],"cash_"+str(r["id"]))
-                    if st.session_state.admin and st.button("🗑️ Μεταφορά στον Κάδο",key="trash_cash_"+str(r["id"])):
-                        soft_delete("cash_bridge",r["id"]);st.rerun()
-    with tab2:
+            rr=cash[pd.to_numeric(cash["year"],errors="coerce")==fy]
+            if len(rr): opening=float(rr.iloc[0].get("opening_cash") or 0)
+        current=opening+inc-exp
+        a,b,c,d=st.columns(4)
+        a.metric("Αρχικό διαθέσιμο",eur(opening))
+        b.metric("Πραγματικές εισπράξεις",eur(inc))
+        c.metric("Πραγματικές πληρωμές",eur(exp))
+        d.metric("Τρέχον διαθέσιμο",eur(current))
+        st.metric("Καθαρή μεταβολή περιόδου",eur(inc-exp))
+
         if st.session_state.admin:
-            with st.expander("➕ Νέο έξοδο"):
-                st.caption("Η φόρμα καθαρίζει μόνο μετά από επιτυχημένη αποθήκευση.")
-                with st.form("cost_new",clear_on_submit=False,enter_to_submit=False):
-                    desc=st.text_input("Περιγραφή *",key="ce_desc")
+            with st.expander("✏️ Ορισμός / αλλαγή αρχικού διαθέσιμου"):
+                st.info("Το αρχικό διαθέσιμο είναι το πραγματικό υπόλοιπο στην αρχή του έτους. Δεν είναι έσοδο.")
+                with st.form("opening_balance_form",clear_on_submit=False,enter_to_submit=False):
+                    ob=st.number_input("Αρχικό διαθέσιμο (€)",value=float(opening),key="opening_balance_value")
+                    save_ob=st.form_submit_button("💾 Αποθήκευση αρχικού διαθέσιμου",type="primary")
+                if save_ob:
+                    try:
+                        existing=sb.table("cash_bridge").select("id").eq("year",fy).limit(1).execute().data or []
+                        if existing:
+                            sb.table("cash_bridge").update({"opening_cash":ob,"deleted_at":None,"deleted_by":None}).eq("id",existing[0]["id"]).execute()
+                        else:
+                            sb.table("cash_bridge").insert({"year":fy,"opening_cash":ob,"revenue":0,"payroll_admin":0,
+                              "direct_program_costs":0,"marketing_it_operating":0,"other_outflows":0}).execute()
+                        st.toast("Το αρχικό διαθέσιμο αποθηκεύτηκε.",icon="✅");st.rerun()
+                    except Exception as exc: show_save_error(exc)
+
+        if len(tx):
+            st.subheader("Κατανομή εξόδων")
+            ex=tx[tx["transaction_type"]=="expense"].copy()
+            if len(ex):
+                bycat=ex.groupby("category")["amount"].sum().sort_values(ascending=False)
+                st.bar_chart(bycat)
+            st.subheader("Πρόσφατες κινήσεις")
+            names=program_name_map()
+            for _,r in tx.sort_values("transaction_date",ascending=False).head(8).iterrows():
+                pname=names.get(str(r.get("program_id")),"Γενικό ΚΕΔΙΒΙΜ") if pd.notna(r.get("program_id")) else "Γενικό ΚΕΔΙΒΙΜ"
+                sign="+" if r["transaction_type"]=="income" else "-"
+                st.write(f"{r.get('transaction_date')} · {pname} · {r.get('description')} · {sign}{eur(r.get('amount',0))}")
+        else:
+            st.info("Δεν υπάρχουν οικονομικές κινήσεις για το επιλεγμένο έτος.")
+
+    with tab2:
+        st.subheader("Οικονομικές κινήσεις")
+        st.caption("Κάθε πραγματική είσπραξη ή πληρωμή καταχωρείται μία φορά. Τα σύνολα υπολογίζονται αυτόματα.")
+        if st.session_state.admin:
+            with st.expander("➕ Νέα οικονομική κίνηση",expanded=False):
+                with st.form("new_transaction",clear_on_submit=False,enter_to_submit=False):
                     c1,c2,c3=st.columns(3)
-                    year=c1.number_input("Έτος",2000,2100,2026,key="ce_year")
-                    cat=c2.text_input("Κατηγορία",key="ce_cat")
-                    amount=c3.number_input("Ποσό (€)",min_value=0.0,key="ce_amount")
-                    new_files=upload_new_record_files("📎 Επισύναψη παραστατικών / αρχείων","ce_files")
-                    submitted=st.form_submit_button("💾 Αποθήκευση εξόδου",type="primary")
+                    tdate=c1.date_input("Ημερομηνία *",key="tx_date")
+                    ttype=c2.selectbox("Τύπος *",["Έσοδο","Έξοδο"],key="tx_type")
+                    amount=c3.number_input("Ποσό (€) *",min_value=0.0,key="tx_amount")
+                    category=st.text_input("Κατηγορία *",placeholder="π.χ. Δίδακτρα, Αμοιβές εκπαιδευτών, Marketing, IT",key="tx_category")
+                    pmap=program_name_map()
+                    options=["Γενικό ΚΕΔΙΒΙΜ"]+[f"{name} | {pid}" for pid,name in pmap.items()]
+                    target=st.selectbox("Αφορά",options,key="tx_target")
+                    desc=st.text_input("Περιγραφή *",key="tx_desc")
+                    c1,c2=st.columns(2)
+                    ref=c1.text_input("Αρ. παραστατικού / Reference",key="tx_ref")
+                    paystat=c2.selectbox("Κατάσταση",["paid","pending"],format_func=lambda x:"Πληρωμένο / Εισπραχθέν" if x=="paid" else "Σε εκκρεμότητα",key="tx_paystat")
+                    notes=st.text_area("Σημειώσεις",key="tx_notes")
+                    files=upload_new_record_files("📎 Παραστατικά / αποδεικτικά","tx_files")
+                    submitted=st.form_submit_button("💾 Αποθήκευση κίνησης",type="primary")
                 if submitted:
-                    if not desc.strip():
-                        st.error("Η περιγραφή είναι υποχρεωτική. Τα υπόλοιπα στοιχεία παραμένουν.")
+                    if not category.strip() or not desc.strip() or amount<=0:
+                        st.error("Συμπλήρωσε κατηγορία, περιγραφή και ποσό μεγαλύτερο από 0. Τα στοιχεία σου παραμένουν.")
                     else:
                         try:
-                            res=sb.table("cost_base").insert({"description":desc,"year":year,"category":cat or None,"amount":amount}).execute()
+                            pid=None if target=="Γενικό ΚΕΔΙΒΙΜ" else target.rsplit(" | ",1)[1]
+                            res=sb.table("financial_transactions").insert({
+                                "transaction_date":tdate.isoformat(),
+                                "transaction_type":"income" if ttype=="Έσοδο" else "expense",
+                                "amount":amount,"category":category.strip(),"program_id":pid,
+                                "description":desc.strip(),"reference_no":ref or None,
+                                "payment_status":paystat,"notes":notes or None}).execute()
                             rid=res.data[0]["id"]
-                            for f in (new_files or []): attachment_upload("cost",rid,f)
-                            reset_keys(["ce_desc","ce_year","ce_cat","ce_amount","ce_files"])
-                            toast_saved("Το έξοδο καταχωρήθηκε επιτυχώς."); st.rerun()
+                            for f in (files or []): attachment_upload("transaction",rid,f)
+                            reset_keys(["tx_date","tx_type","tx_amount","tx_category","tx_target","tx_desc","tx_ref","tx_paystat","tx_notes","tx_files"])
+                            st.session_state["_saved_toast"]="Η οικονομική κίνηση καταχωρήθηκε."
+                            st.rerun()
                         except Exception as exc: show_save_error(exc)
-        if len(costs):
-            for _,r in costs.sort_values("year",ascending=False).iterrows():
-                with st.expander(f"💶 {r.get('description','')} · {eur(r.get('amount',0))} · {r.get('category') or '—'}"):
+
+        if len(transactions):
+            pmap=program_name_map()
+            filter_year=st.selectbox("Φίλτρο έτους",["Όλα"]+active_years(),key="tx_filter_year")
+            q=transactions.copy()
+            q["_date"]=pd.to_datetime(q["transaction_date"],errors="coerce")
+            if filter_year!="Όλα": q=q[q["_date"].dt.year==int(filter_year)]
+            for _,r in q.sort_values("transaction_date",ascending=False).iterrows():
+                pname=pmap.get(str(r.get("program_id")),"Γενικό ΚΕΔΙΒΙΜ") if pd.notna(r.get("program_id")) else "Γενικό ΚΕΔΙΒΙΜ"
+                typ="Έσοδο" if r.get("transaction_type")=="income" else "Έξοδο"
+                with st.expander(f"{r.get('transaction_date')} · {typ} · {r.get('description')} · {eur(r.get('amount',0))}"):
+                    st.write(f"**Κατηγορία:** {r.get('category') or '—'}")
+                    st.write(f"**Αφορά:** {pname}")
+                    st.write(f"**Παραστατικό/Reference:** {r.get('reference_no') or '—'}")
+                    st.write(f"**Κατάσταση:** {r.get('payment_status') or '—'}")
+                    if r.get("notes"): st.write(f"**Σημειώσεις:** {r.get('notes')}")
                     if st.session_state.admin:
-                        with st.form("editcost_"+str(r["id"]),enter_to_submit=False):
-                            c1,c2=st.columns(2)
-                            edesc=c1.text_input("Περιγραφή",value=str(r.get("description") or ""))
-                            ecat=c2.text_input("Κατηγορία",value=str(r.get("category") or ""))
-                            eamount=st.number_input("Ποσό (€)",min_value=0.0,value=float(r.get("amount") or 0),key="amt_"+str(r["id"]))
-                            if st.form_submit_button("Αποθήκευση αλλαγών"):
-                                sb.table("cost_base").update({"description":edesc,"category":ecat or None,"amount":eamount}).eq("id",r["id"]).execute();st.rerun()
-                    attachment_panel("cost",r["id"],"cost_"+str(r["id"]))
-                    if st.session_state.admin and st.button("🗑️ Μεταφορά στον Κάδο",key="trash_cost_"+str(r["id"])):
-                        soft_delete("cost_base",r["id"]);st.rerun()
+                        with st.form("edittx_"+str(r["id"]),enter_to_submit=False):
+                            e1,e2=st.columns(2)
+                            eamount=e1.number_input("Ποσό (€)",min_value=0.0,value=float(r.get("amount") or 0),key="eta_"+str(r["id"]))
+                            ecat=e2.text_input("Κατηγορία",value=str(r.get("category") or ""),key="etc_"+str(r["id"]))
+                            edesc=st.text_input("Περιγραφή",value=str(r.get("description") or ""),key="etd_"+str(r["id"]))
+                            if st.form_submit_button("💾 Αποθήκευση αλλαγών"):
+                                try:
+                                    sb.table("financial_transactions").update({"amount":eamount,"category":ecat,"description":edesc}).eq("id",r["id"]).execute()
+                                    st.toast("Οι αλλαγές αποθηκεύτηκαν.",icon="✅");st.rerun()
+                                except Exception as exc: show_save_error(exc)
+                    attachment_panel("transaction",r["id"],"tx_"+str(r["id"]))
+                    if st.session_state.admin and st.button("🗑️ Μεταφορά στον Κάδο",key="trash_tx_"+str(r["id"])):
+                        soft_delete("financial_transactions",r["id"]);st.rerun()
+        else:
+            st.info("Δεν υπάρχουν ακόμη οικονομικές κινήσεις.")
+
+    with tab3:
+        st.subheader("Οικονομική καρτέλα ανά πρόγραμμα")
+        if len(programs)==0:
+            st.info("Δεν υπάρχουν προγράμματα.")
+        else:
+            labels={f"{r.get('program_name')} · {r.get('year')}":str(r["id"]) for _,r in programs.iterrows()}
+            selected=st.selectbox("Πρόγραμμα / κύκλος",list(labels.keys()),key="program_fin_select")
+            pid=labels[selected]
+            pr=programs[programs["id"].astype(str)==pid].iloc[0]
+            pt=transactions[transactions["program_id"].astype(str)==pid].copy() if len(transactions) else pd.DataFrame()
+            pinc,pexp=tx_amounts(pt)
+            nominal=float(pr.get("nominal_tuition") or 0)
+            enrollments=float(pr.get("enrollments") or 0)
+            expected=nominal*enrollments
+            outstanding=max(expected-pinc,0)
+            a,b,c,d=st.columns(4)
+            a.metric("Πραγματικές εισπράξεις",eur(pinc))
+            b.metric("Πραγματικά έξοδα",eur(pexp))
+            c.metric("Καθαρό αποτέλεσμα",eur(pinc-pexp))
+            d.metric("Εκτιμώμενο ανεξόφλητο",eur(outstanding))
+            st.caption("Το «εκτιμώμενο ανεξόφλητο» = ονομαστικό δίδακτρο × εγγραφές − πραγματικές εισπράξεις. Είναι ένδειξη και όχι λογιστική βεβαίωση απαίτησης.")
+            if len(pt):
+                st.subheader("Κινήσεις προγράμματος")
+                for _,r in pt.sort_values("transaction_date",ascending=False).iterrows():
+                    sign="+" if r["transaction_type"]=="income" else "-"
+                    st.write(f"{r.get('transaction_date')} · {r.get('category')} · {r.get('description')} · {sign}{eur(r.get('amount',0))}")
+
+    with tab4:
+        st.subheader("Budget vs Actual")
+        if len(programs)==0:
+            st.info("Δεν υπάρχουν προγράμματα.")
+        else:
+            rows=[]
+            for _,pr in programs.iterrows():
+                pid=str(pr["id"])
+                pt=transactions[transactions["program_id"].astype(str)==pid] if len(transactions) else pd.DataFrame()
+                ai,ae=tx_amounts(pt)
+                br=float(pr.get("budget_revenue") or 0)
+                be=float(pr.get("budget_expenses") or 0)
+                rows.append({"Πρόγραμμα":pr.get("program_name"),"Budget έσοδα":br,"Actual έσοδα":ai,
+                             "Budget έξοδα":be,"Actual έξοδα":ae,"Actual αποτέλεσμα":ai-ae})
+            bdf=pd.DataFrame(rows)
+            st.dataframe(bdf,use_container_width=True,hide_index=True)
+            if st.session_state.admin:
+                st.caption("Τα budget στοιχεία αλλάζουν από την καρτέλα Προγράμματα → Επεξεργασία.")
 
 elif page=="Monitoring":
     st.caption("Εκκρεμότητες, actions και deadlines")
@@ -381,6 +516,7 @@ elif page=="Reports":
         cash.to_excel(w,sheet_name="Cash Flow",index=False)
         costs.to_excel(w,sheet_name="Έξοδα",index=False)
         findings.to_excel(w,sheet_name="Monitoring",index=False)
+        transactions.to_excel(w,sheet_name="Οικονομικές Κινήσεις",index=False)
     st.download_button("⬇️ Λήψη συνολικού Excel",out.getvalue(),"KEDIVIM_Monitoring.xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     st.info("Τα PDF executive reports θα προστεθούν όταν υπάρχουν αρκετά πραγματικά δεδομένα για ουσιαστική αναφορά.")
 
@@ -398,6 +534,7 @@ elif page=="Ρυθμίσεις":
             ("Cash Flow","cash_bridge","cash","year"),
             ("Έξοδα","cost_base","cost","description"),
             ("Monitoring","findings_actions","monitoring","finding"),
+            ("Οικονομικές κινήσεις","financial_transactions","transaction","description"),
         ]
         trashed=[]
         for label,table,etype,titlecol in configs:
