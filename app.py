@@ -81,6 +81,18 @@ def editor_sync(table, original, columns, key):
         st.rerun()
     return edited
 
+
+def status_badge(status):
+    labels={"Pending":"Σε εκκρεμότητα","Received":"Παραλήφθηκε","Late":"Σε καθυστέρηση",
+            "Open":"Ανοιχτό","In progress":"Σε εξέλιξη","Done":"Ολοκληρώθηκε"}
+    return labels.get(str(status), str(status))
+
+def section_kpis(items):
+    cols=st.columns(len(items))
+    for col,(label,value) in zip(cols,items):
+        col.metric(label,value)
+
+
 # ---------- Login ----------
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
@@ -108,8 +120,16 @@ with st.sidebar:
            "Ερωτηματολόγια","Στρατηγικό Πλάνο","Reports & Export"]
     page=st.radio("Πλοήγηση",pages)
 
-st.title("ΚΕΔΙΒΙΜ · Diagnostic Hub")
-st.caption("Οικονομική, λειτουργική και στρατηγική αποτύπωση · Supabase connected")
+h1,h2,h3 = st.columns([1,1,1])  # harmless layout initialization
+head1, head2 = st.columns([5,1])
+with head1:
+    st.title("ΚΕΔΙΒΙΜ · Diagnostic Hub")
+    st.caption("Πανεπιστήμιο Θεσσαλίας · Οικονομική, λειτουργική και στρατηγική αποτύπωση")
+with head2:
+    c1,c2=st.columns(2)
+    with c1: st.image("assets/kedivim_logo.png", width=58)
+    with c2: st.image("assets/uth_logo.png", width=58)
+
 
 # ---------- Load live data ----------
 try:
@@ -150,19 +170,39 @@ if page=="Dashboard – Υγεία ΚΕΔΙΒΙΜ":
         st.info("Η βάση είναι συνδεδεμένη. Περιμένει τα πρώτα πραγματικά οικονομικά δεδομένα.")
 
 elif page=="Οικονομική Εικόνα / Cash Flow":
-    st.subheader(page)
-    cols=["year","opening_cash","revenue","payroll_admin","direct_program_costs","marketing_it_operating","other_outflows","notes"]
+    st.subheader("Οικονομική Εικόνα / Cash Flow")
+    st.caption("Ετήσια εικόνα εσόδων, εκροών και ταμειακής μεταβολής.")
     if st.session_state.is_admin:
-        editor_sync("cash_bridge",cash,cols,"cash")
-    else:
-        st.dataframe(cash[cols] if len(cash) else cash,use_container_width=True,hide_index=True)
+        with st.expander("➕ Νέο οικονομικό έτος"):
+            with st.form("new_cash",clear_on_submit=True):
+                year=st.number_input("Έτος",2000,2100,2026)
+                c1,c2=st.columns(2)
+                opening=c1.number_input("Αρχικό ταμείο (€)",value=0.0)
+                revenue=c2.number_input("Έσοδα (€)",value=0.0)
+                c1,c2=st.columns(2)
+                payroll=c1.number_input("Μισθοδοσία / Διοίκηση (€)",value=0.0)
+                direct=c2.number_input("Άμεσα κόστη προγραμμάτων (€)",value=0.0)
+                c1,c2=st.columns(2)
+                operating=c1.number_input("Marketing / IT / Λειτουργικά (€)",value=0.0)
+                other=c2.number_input("Λοιπές εκροές (€)",value=0.0)
+                notes=st.text_area("Σημειώσεις")
+                if st.form_submit_button("Αποθήκευση έτους",type="primary"):
+                    try:
+                        db.table("cash_bridge").insert({"year":year,"opening_cash":opening,"revenue":revenue,
+                            "payroll_admin":payroll,"direct_program_costs":direct,
+                            "marketing_it_operating":operating,"other_outflows":other,"notes":notes or None}).execute()
+                        st.success("Το οικονομικό έτος αποθηκεύτηκε."); st.rerun()
+                    except Exception:
+                        st.error("Υπάρχει ήδη εγγραφή για αυτό το έτος ή τα στοιχεία δεν ήταν έγκυρα.")
     if len(cash):
-        q=cash.copy()
-        for c in cols[1:7]: q[c]=n(q[c])
-        q["net_change"]=q["revenue"]-q[cols[3:7]].sum(axis=1)
-        q["closing_cash"]=q["opening_cash"]+q["net_change"]
-        st.subheader("Υπολογισμένη εικόνα")
-        st.dataframe(q[["year","net_change","closing_cash"]],use_container_width=True,hide_index=True)
+        for _,r in cash.sort_values("year",ascending=False).iterrows():
+            out=sum(float(r.get(c) or 0) for c in ["payroll_admin","direct_program_costs","marketing_it_operating","other_outflows"])
+            net=float(r.get("revenue") or 0)-out
+            closing=float(r.get("opening_cash") or 0)+net
+            with st.expander(f"💰 {int(r.get('year'))} · Κλείσιμο {euro(closing)}"):
+                c1,c2,c3,c4=st.columns(4)
+                c1.metric("Έσοδα",euro(r.get("revenue",0))); c2.metric("Εκροές",euro(out))
+                c3.metric("Net Change",euro(net)); c4.metric("Closing Cash",euro(closing))
 
 elif page=="Program Economics":
     st.subheader("Program Economics")
@@ -296,41 +336,206 @@ elif page=="Program Economics":
                     st.rerun()
 
 elif page=="Βάση Κόστους":
-    st.subheader(page)
-    cols=["year","category","subcategory","description","cost_type","amount","source_file","notes"]
-    if st.session_state.is_admin: editor_sync("cost_base",costs,cols,"costs")
-    else: st.dataframe(costs[cols] if len(costs) else costs,use_container_width=True,hide_index=True)
-    if len(costs): st.metric("Συνολικό καταγεγραμμένο κόστος",euro(n(costs["amount"]).sum()))
+    st.subheader("Βάση Κόστους")
+    st.caption("Σταθερά και μεταβλητά κόστη του ΚΕΔΙΒΙΜ.")
+    section_kpis([("Εγγραφές κόστους",len(costs)),("Συνολικό κόστος",euro(n(costs["amount"]).sum()) if len(costs) else "0 €")])
+    if st.session_state.is_admin:
+        with st.expander("➕ Νέα δαπάνη"):
+            with st.form("new_cost",clear_on_submit=True):
+                c1,c2,c3=st.columns(3)
+                year=c1.number_input("Έτος",2000,2100,2026)
+                category=c2.text_input("Κατηγορία")
+                cost_type=c3.selectbox("Τύπος",["Σταθερό","Μεταβλητό"])
+                description=st.text_input("Περιγραφή *")
+                c1,c2=st.columns(2)
+                amount=c1.number_input("Ποσό (€)",min_value=0.0,value=0.0)
+                supplier=c2.text_input("Προμηθευτής")
+                recurring=st.checkbox("Επαναλαμβανόμενη δαπάνη")
+                notes=st.text_area("Σημειώσεις")
+                if st.form_submit_button("Αποθήκευση δαπάνης",type="primary"):
+                    if not description.strip(): st.error("Η περιγραφή είναι υποχρεωτική.")
+                    else:
+                        db.table("cost_base").insert({"year":year,"category":category or None,"description":description,
+                            "cost_type":cost_type,"amount":amount,"supplier":supplier or None,
+                            "recurring":recurring,"notes":notes or None}).execute()
+                        st.success("Η δαπάνη αποθηκεύτηκε."); st.rerun()
+    if len(costs):
+        search=st.text_input("Αναζήτηση δαπάνης")
+        q=costs.copy()
+        if search:q=q[q["description"].fillna("").str.contains(search,case=False)]
+        for _,r in q.iterrows():
+            with st.expander(f"💶 {r.get('description','')} · {euro(r.get('amount',0))}"):
+                st.write(f"Κατηγορία: {r.get('category') or '—'} | Έτος: {r.get('year') or '—'} | Τύπος: {r.get('cost_type') or '—'}")
+                if st.session_state.is_admin:
+                    if st.button("Διαγραφή",key="costdel"+str(r["id"])):
+                        db.table("cost_base").delete().eq("id",r["id"]).execute(); st.rerun()
 
 elif page=="Διοικητικός Φόρτος":
-    st.subheader(page)
-    cols=["role","process","frequency","cases_per_month","minutes_per_case","system_file","duplicate_entry","automation_potential","notes"]
-    if st.session_state.is_admin: editor_sync("admin_workload",workload,cols,"workload")
-    else: st.dataframe(workload[cols] if len(workload) else workload,use_container_width=True,hide_index=True)
+    st.subheader("Διοικητικός Φόρτος")
+    st.caption("Χρόνος, επαναλαμβανόμενες διαδικασίες, pain points και δυνατότητες automation.")
+    hours=(n(workload["cases_per_month"])*n(workload["minutes_per_case"])/60).sum() if len(workload) else 0
+    section_kpis([("Διαδικασίες",len(workload)),("Ώρες / μήνα",f"{hours:.1f}")])
+    if st.session_state.is_admin:
+        with st.expander("➕ Νέα διαδικασία"):
+            with st.form("new_work",clear_on_submit=True):
+                c1,c2=st.columns(2)
+                role=c1.text_input("Ρόλος")
+                owner=c2.text_input("Υπεύθυνος")
+                process=st.text_input("Διαδικασία *")
+                c1,c2,c3=st.columns(3)
+                frequency=c1.text_input("Συχνότητα")
+                cases=c2.number_input("Πλήθος / μήνα",min_value=0.0,value=0.0)
+                minutes=c3.number_input("Λεπτά / περίπτωση",min_value=0.0,value=0.0)
+                system=st.text_input("Σύστημα / αρχείο")
+                duplicate=st.checkbox("Υπάρχει διπλή καταχώριση")
+                automation=st.selectbox("Automation potential",["","Χαμηλό","Μέτριο","Υψηλό"])
+                pain=st.text_area("Pain point")
+                improvement=st.text_area("Προτεινόμενη βελτίωση")
+                if st.form_submit_button("Αποθήκευση διαδικασίας",type="primary"):
+                    if not process.strip(): st.error("Η διαδικασία είναι υποχρεωτική.")
+                    else:
+                        db.table("admin_workload").insert({"role":role or None,"responsible_person":owner or None,
+                            "process":process,"frequency":frequency or None,"cases_per_month":cases,
+                            "minutes_per_case":minutes,"system_file":system or None,"duplicate_entry":duplicate,
+                            "automation_potential":automation or None,"pain_point":pain or None,
+                            "proposed_improvement":improvement or None}).execute()
+                        st.success("Η διαδικασία αποθηκεύτηκε."); st.rerun()
     if len(workload):
-        q=workload.copy(); q["hours_per_month"]=n(q["cases_per_month"])*n(q["minutes_per_case"])/60
-        st.metric("Συνολικές διοικητικές ώρες/μήνα",f"{q['hours_per_month'].sum():.1f}")
-        st.dataframe(q[["role","process","hours_per_month"]],use_container_width=True,hide_index=True)
+        for _,r in workload.iterrows():
+            hrs=float(r.get("cases_per_month") or 0)*float(r.get("minutes_per_case") or 0)/60
+            with st.expander(f"⚙️ {r.get('process','')} · {hrs:.1f} ώρες/μήνα"):
+                st.write(f"Ρόλος: {r.get('role') or '—'} | Automation: {r.get('automation_potential') or '—'}")
+                if r.get("pain_point"): st.warning(r.get("pain_point"))
 
 elif page=="Findings & Action Plan":
-    st.subheader(page)
-    cols=["finding_code","area","finding","evidence_source","root_cause","impact","priority",
-          "proposed_action","owner","horizon","status","success_kpi","due_date"]
-    if st.session_state.is_admin: editor_sync("findings_actions",findings,cols,"findings")
-    else: st.dataframe(findings[cols] if len(findings) else findings,use_container_width=True,hide_index=True)
+    st.subheader("Findings & Action Plan")
+    st.caption("Ευρήματα, προτεραιότητες, owners, deadlines και πρόοδος ενεργειών.")
+    p1=((findings["priority"].astype(str)=="P1") & (~findings["status"].astype(str).str.lower().isin(["done","ολοκληρώθηκε"]))).sum() if len(findings) else 0
+    section_kpis([("Συνολικά ευρήματα",len(findings)),("Ανοιχτά P1",int(p1))])
+    if st.session_state.is_admin:
+        with st.expander("➕ Νέο εύρημα / action"):
+            with st.form("new_finding",clear_on_submit=True):
+                c1,c2,c3=st.columns(3)
+                code=c1.text_input("Κωδικός")
+                area=c2.text_input("Πεδίο")
+                priority=c3.selectbox("Priority",["P1","P2","P3"])
+                finding=st.text_area("Εύρημα *")
+                impact=st.text_area("Επίπτωση")
+                action=st.text_area("Προτεινόμενη ενέργεια")
+                c1,c2,c3=st.columns(3)
+                owner=c1.text_input("Owner")
+                status=c2.selectbox("Status",["Open","In progress","Done"])
+                due=c3.date_input("Deadline",value=None)
+                kpi=st.text_input("KPI επιτυχίας")
+                if st.form_submit_button("Αποθήκευση",type="primary"):
+                    if not finding.strip(): st.error("Το εύρημα είναι υποχρεωτικό.")
+                    else:
+                        db.table("findings_actions").insert({"finding_code":code or None,"area":area or None,
+                            "finding":finding,"impact":impact or None,"priority":priority,
+                            "proposed_action":action or None,"owner":owner or None,"status":status,
+                            "due_date":due.isoformat() if due else None,"success_kpi":kpi or None}).execute()
+                        st.success("Το εύρημα αποθηκεύτηκε."); st.rerun()
     if len(findings):
-        st.bar_chart(findings["priority"].fillna("Χωρίς προτεραιότητα").value_counts())
+        for _,r in findings.sort_values("priority").iterrows():
+            with st.expander(f"🚩 {r.get('priority','')} · {r.get('finding','')}"):
+                c1,c2,c3=st.columns(3)
+                c1.metric("Status",r.get("status") or "—"); c2.metric("Owner",r.get("owner") or "—"); c3.metric("Deadline",str(r.get("due_date") or "—"))
+                if r.get("proposed_action"): st.write("Action:",r.get("proposed_action"))
+                if r.get("success_kpi"): st.write("KPI:",r.get("success_kpi"))
 
 elif page=="Data Room":
-    st.subheader(page)
-    if not len(requests):
-        st.info("Δεν υπάρχουν στοιχεία checklist.")
+    st.subheader("Data Room")
+    st.caption("Αιτήματα δεδομένων, δικαιολογητικά και παρακολούθηση παραλαβής.")
+
+    total=len(requests)
+    received_count=int(requests["received"].fillna(False).sum()) if total else 0
+    pending=total-received_count
+    section_kpis([("Συνολικά αιτήματα",total),("Παραλήφθηκαν",received_count),("Σε εκκρεμότητα",pending)])
+
+    if st.session_state.is_admin:
+        with st.expander("➕ Νέο αίτημα δεδομένων"):
+            with st.form("new_request",clear_on_submit=True):
+                item=st.text_input("Τίτλος αιτήματος *")
+                c1,c2=st.columns(2)
+                category=c1.selectbox("Κατηγορία",["Οικονομικά","Προγράμματα","Portfolio","Λειτουργία","ΕΛΚΕ","Marketing","IT","Άλλο"])
+                owner=c2.text_input("Υπεύθυνος")
+                c1,c2=st.columns(2)
+                requested=c1.date_input("Ημερομηνία αιτήματος",value=None)
+                deadline=c2.date_input("Προθεσμία",value=None)
+                notes=st.text_area("Σημειώσεις")
+                if st.form_submit_button("Δημιουργία αιτήματος",type="primary"):
+                    if not item.strip(): st.error("Ο τίτλος είναι υποχρεωτικός.")
+                    else:
+                        db.table("data_requests").insert({
+                            "item":item.strip(),"category":category,"responsible_person":owner or None,
+                            "requested_at":requested.isoformat() if requested else None,
+                            "deadline":deadline.isoformat() if deadline else None,"notes":notes or None
+                        }).execute()
+                        st.success("Το αίτημα δημιουργήθηκε."); st.rerun()
+
+    if total:
+        c1,c2,c3=st.columns([2,1,1])
+        search=c1.text_input("Αναζήτηση",placeholder="Αναζήτηση αιτήματος...")
+        cat_options=["Όλες"]+sorted([x for x in requests["category"].dropna().astype(str).unique()])
+        cat=c2.selectbox("Κατηγορία",cat_options)
+        state=c3.selectbox("Κατάσταση",["Όλες","Σε εκκρεμότητα","Παραλήφθηκε"])
+        q=requests.copy()
+        if search: q=q[q["item"].fillna("").str.contains(search,case=False)]
+        if cat!="Όλες": q=q[q["category"]==cat]
+        if state=="Παραλήφθηκε": q=q[q["received"]==True]
+        if state=="Σε εκκρεμότητα": q=q[q["received"]!=True]
+
+        left,right=st.columns([1,1.35])
+        with left:
+            st.markdown("### Αιτήματα")
+            if q.empty: st.info("Δεν βρέθηκαν αιτήματα.")
+            else:
+                options={}
+                for _,r in q.iterrows():
+                    icon="✅" if bool(r.get("received")) else "🕒"
+                    label=f"{icon} {r.get('item','')}  ·  {r.get('category','')}"
+                    options[label]=r["id"]
+                selected_label=st.radio("Επιλογή αιτήματος",list(options.keys()),label_visibility="collapsed")
+                selected_id=options[selected_label]
+
+        with right:
+            row=requests[requests["id"]==selected_id].iloc[0].to_dict()
+            st.markdown(f"### {row.get('item','')}")
+            st.caption(f"{'Παραλήφθηκε' if row.get('received') else 'Σε εκκρεμότητα'} · Κατηγορία: {row.get('category') or '—'}")
+            if st.session_state.is_admin:
+                with st.form("request_detail"):
+                    c1,c2=st.columns(2)
+                    owner=c1.text_input("Υπεύθυνος",value=str(row.get("responsible_person") or ""))
+                    source=c2.text_input("Πηγή / αρχείο",value=str(row.get("source_file") or ""))
+                    c1,c2=st.columns(2)
+                    requested=c1.date_input("Ημερομηνία αιτήματος",value=pd.to_datetime(row.get("requested_at")).date() if row.get("requested_at") else None)
+                    deadline=c2.date_input("Προθεσμία",value=pd.to_datetime(row.get("deadline")).date() if row.get("deadline") else None)
+                    received=st.checkbox("Το στοιχείο έχει παραληφθεί",value=bool(row.get("received")))
+                    verification=st.selectbox("Verification Status",["Pending","Verified","Needs review"],
+                        index=["Pending","Verified","Needs review"].index(row.get("verification_status")) if row.get("verification_status") in ["Pending","Verified","Needs review"] else 0)
+                    notes=st.text_area("Σημειώσεις",value=str(row.get("notes") or ""))
+                    if st.form_submit_button("Αποθήκευση αλλαγών",type="primary"):
+                        db.table("data_requests").update({
+                            "responsible_person":owner or None,"source_file":source or None,
+                            "requested_at":requested.isoformat() if requested else None,
+                            "deadline":deadline.isoformat() if deadline else None,
+                            "received":received,
+                            "received_at":pd.Timestamp.now(tz="UTC").isoformat() if received and not row.get("received_at") else row.get("received_at"),
+                            "verification_status":verification,"notes":notes or None
+                        }).eq("id",selected_id).execute()
+                        st.success("Αποθηκεύτηκε."); st.rerun()
+                with st.expander("Διαγραφή αιτήματος"):
+                    confirm=st.checkbox("Επιβεβαιώνω τη διαγραφή.",key="del_req_confirm")
+                    if st.button("Διαγραφή",disabled=not confirm,key="del_req"):
+                        db.table("data_requests").delete().eq("id",selected_id).execute()
+                        st.rerun()
+            else:
+                c1,c2=st.columns(2)
+                c1.markdown(f"**Υπεύθυνος**  \n{row.get('responsible_person') or '—'}")
+                c2.markdown(f"**Πηγή**  \n{row.get('source_file') or '—'}")
+                st.markdown(f"**Σημειώσεις**  \n{row.get('notes') or '—'}")
     else:
-        cols=["item","category","received","received_at","source_file","notes"]
-        if st.session_state.is_admin: editor_sync("data_requests",requests,cols,"requests")
-        else: st.dataframe(requests[cols],use_container_width=True,hide_index=True)
-        done=int(requests["received"].fillna(False).sum())
-        st.progress(done/len(requests)); st.caption(f"{done}/{len(requests)} διαθέσιμα")
+        st.info("Δεν υπάρχουν ακόμη αιτήματα στο Data Room.")
 
 elif page=="Ερωτηματολόγια":
     st.subheader(page)
