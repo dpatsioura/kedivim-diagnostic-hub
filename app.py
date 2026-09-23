@@ -119,7 +119,7 @@ h1,h2,h3{letter-spacing:-.025em}
 with st.sidebar:
     st.image("assets/kedivim_uth_logo.jpg",use_container_width=True)
     st.markdown("### Diagnostic Hub")
-    pages=["Dashboard","Προγράμματα","Οικονομικά","Monitoring","Reports","Ρυθμίσεις"]
+    pages=["Dashboard","Προγράμματα","Οικονομικά","Αξιολόγηση & Έρευνες","Monitoring","Reports","Ρυθμίσεις"]
     page=st.radio("Menu",pages,label_visibility="collapsed")
     st.divider()
     if st.session_state.admin:
@@ -141,8 +141,11 @@ try:
     costs=get("cost_base","year")
     findings=get("findings_actions")
     transactions=get("financial_transactions","transaction_date")
+    surveys=get("surveys")
+    survey_metrics=get("survey_metrics")
+    survey_findings=get("survey_findings")
 except Exception as e:
-    st.error("Δεν ήταν δυνατή η φόρτωση της βάσης. Αν μόλις αναβάθμισες την εφαρμογή, τρέξε πρώτα το SUPABASE_FINANCIAL_UPGRADE.sql.")
+    st.error("Δεν ήταν δυνατή η φόρτωση της βάσης. Βεβαιώσου ότι έχουν εκτελεστεί τα SQL upgrades της εφαρμογής.")
     st.stop()
 
 
@@ -514,6 +517,65 @@ elif page=="Οικονομικά":
             if st.session_state.admin:
                 st.caption("Τα Budget εσόδων και εξόδων ορίζονται από Προγράμματα → Επεξεργασία.")
 
+elif page=="Αξιολόγηση & Έρευνες":
+    st.caption("Αποτελέσματα ερωτηματολογίων, KPI, ευρήματα και actions συνεχούς βελτίωσης")
+    st.info("Εδώ καταχωρούνται τα επεξεργασμένα αποτελέσματα των ερευνών — όχι οι ατομικές/raw απαντήσεις.")
+    if st.session_state.admin:
+        with st.expander("➕ Νέα έρευνα / αξιολόγηση"):
+            with st.form("new_survey",clear_on_submit=False,enter_to_submit=False):
+                title=st.text_input("Τίτλος έρευνας *",key="sv_title")
+                c1,c2,c3=st.columns(3)
+                typ=c1.selectbox("Κατηγορία",["Εκπαιδευόμενοι","Διοικητικό προσωπικό / στελέχη","Εκπαιδευτές","Άλλη"],key="sv_type")
+                period=c2.text_input("Περίοδος",key="sv_period")
+                count=c3.number_input("Αριθμός απαντήσεων",min_value=0,key="sv_count")
+                summary=st.text_area("Σύντομη σύνοψη / συμπέρασμα",key="sv_summary")
+                files=upload_new_record_files("📎 Raw αρχείο / πλήρης ανάλυση / έκθεση","sv_files")
+                submit=st.form_submit_button("💾 Αποθήκευση έρευνας",type="primary")
+            if submit:
+                if not title.strip(): st.error("Ο τίτλος είναι υποχρεωτικός. Τα στοιχεία παραμένουν.")
+                else:
+                    try:
+                        res=sb.table("surveys").insert({"title":title.strip(),"survey_type":typ,"period_label":period or None,"response_count":count,"summary":summary or None}).execute(); sid=res.data[0]["id"]
+                        for f in (files or []): attachment_upload("survey",sid,f)
+                        reset_keys(["sv_title","sv_type","sv_period","sv_count","sv_summary","sv_files"]); st.session_state["_saved_toast"]="Η έρευνα καταχωρήθηκε."; st.rerun()
+                    except Exception as exc: show_save_error(exc)
+    if len(surveys)==0: st.info("Δεν έχουν καταχωρηθεί ακόμη αποτελέσματα ερευνών.")
+    else:
+        a,b,c=st.columns(3); a.metric("Έρευνες",len(surveys)); b.metric("Συνολικές απαντήσεις",int(pd.to_numeric(surveys["response_count"],errors="coerce").fillna(0).sum())); c.metric("Findings → Monitoring",int(survey_findings["monitoring_action_id"].notna().sum()) if len(survey_findings) else 0)
+        filt=st.selectbox("Προβολή",["Όλες","Εκπαιδευόμενοι","Διοικητικό προσωπικό / στελέχη","Εκπαιδευτές","Άλλη"])
+        sq=surveys if filt=="Όλες" else surveys[surveys["survey_type"]==filt]
+        for _,s in sq.sort_values("created_at",ascending=False).iterrows():
+            sid=str(s["id"]); sm=survey_metrics[survey_metrics["survey_id"].astype(str)==sid] if len(survey_metrics) else pd.DataFrame(); sf=survey_findings[survey_findings["survey_id"].astype(str)==sid] if len(survey_findings) else pd.DataFrame()
+            with st.container(border=True):
+                x,y=st.columns([4,1]); x.markdown(f"### {s.get('title')}"); x.caption(f"{s.get('survey_type')} · {s.get('period_label') or 'Χωρίς περίοδο'}"); y.metric("Απαντήσεις",int(s.get("response_count") or 0))
+                if s.get("summary"): st.write(s.get("summary"))
+                if len(sm):
+                    st.markdown("#### KPI"); cols=st.columns(min(len(sm),4))
+                    for i,(_,m) in enumerate(sm.iterrows()):
+                        v=m.get("metric_value"); label=(f"{float(v):g}{m.get('metric_scale') or ''}" if pd.notna(v) else "—"); cols[i%len(cols)].metric(str(m.get("metric_name")),label)
+                else: st.caption("Δεν έχουν προστεθεί ακόμη KPI.")
+                if len(sf):
+                    st.markdown("#### Βασικά ευρήματα")
+                    for _,f in sf.iterrows():
+                        icon="⚠️" if f.get("finding_type")=="problem" else ("💡" if f.get("finding_type")=="proposal" else "•"); linked=" · ✓ Monitoring" if pd.notna(f.get("monitoring_action_id")) else ""; st.write(f"{icon} {f.get('finding_text')}{linked}")
+                if st.session_state.admin:
+                    with st.expander("➕ Προσθήκη KPI"):
+                        with st.form("metric_"+sid,clear_on_submit=True,enter_to_submit=False):
+                            c1,c2,c3=st.columns(3); mn=c1.text_input("KPI / δείκτης *"); mv=c2.number_input("Τιμή",value=0.0); ms=c3.text_input("Κλίμακα / μονάδα",placeholder="π.χ. /5, %, NPS"); notes=st.text_input("Σημείωση"); add=st.form_submit_button("Προσθήκη KPI")
+                        if add and mn.strip(): sb.table("survey_metrics").insert({"survey_id":sid,"metric_name":mn.strip(),"metric_value":mv,"metric_scale":ms or None,"notes":notes or None}).execute(); st.rerun()
+                    with st.expander("➕ Προσθήκη ευρήματος / πρότασης"):
+                        with st.form("sf_"+sid,clear_on_submit=True,enter_to_submit=False):
+                            ft=st.selectbox("Τύπος",["finding","problem","proposal"],format_func=lambda z:{"finding":"Εύρημα","problem":"Πρόβλημα","proposal":"Πρόταση"}[z]); ftext=st.text_area("Κείμενο *"); evidence=st.text_input("Τεκμηρίωση / evidence"); pr=st.selectbox("Priority",["","P1","P2","P3"]); addf=st.form_submit_button("Προσθήκη")
+                        if addf and ftext.strip(): sb.table("survey_findings").insert({"survey_id":sid,"finding_type":ft,"finding_text":ftext.strip(),"evidence":evidence or None,"priority":pr or None}).execute(); st.rerun()
+                    unlinked=sf[sf["monitoring_action_id"].isna()] if len(sf) else pd.DataFrame()
+                    if len(unlinked):
+                        with st.expander("➡️ Δημιουργία Action στο Monitoring"):
+                            choices={str(r["finding_text"]):str(r["id"]) for _,r in unlinked.iterrows()}; choice=st.selectbox("Εύρημα",list(choices.keys()),key="lf_"+sid); c1,c2,c3=st.columns(3); owner=c1.text_input("Responsible",key="so_"+sid); due=c2.date_input("Deadline",value=None,key="sd_"+sid); pri=c3.selectbox("Priority",["P1","P2","P3"],key="sp_"+sid)
+                            if st.button("Δημιουργία Action",key="ca_"+sid):
+                                fid=choices[choice]; fres=unlinked[unlinked["id"].astype(str)==fid].iloc[0]; ar=sb.table("findings_actions").insert({"finding":f"Survey: {fres.get('finding_text')}","area":"Αξιολόγηση & Έρευνες","evidence_source":s.get("title"),"priority":pri,"owner":owner or None,"due_date":due.isoformat() if due else None,"status":"Open"}).execute(); aid=ar.data[0]["id"]; sb.table("survey_findings").update({"monitoring_action_id":aid}).eq("id",fid).execute(); st.toast("Το εύρημα συνδέθηκε με νέο Action στο Monitoring.",icon="✅"); st.rerun()
+                attachment_panel("survey",sid,"survey_"+sid)
+                if st.session_state.admin and st.button("🗑️ Μεταφορά έρευνας στον Κάδο",key="trash_survey_"+sid): soft_delete("surveys",sid); st.rerun()
+
 elif page=="Monitoring":
     st.caption("Εκκρεμότητες, actions και deadlines")
     if st.session_state.admin:
@@ -564,6 +626,9 @@ elif page=="Reports":
         costs.to_excel(w,sheet_name="Έξοδα",index=False)
         findings.to_excel(w,sheet_name="Monitoring",index=False)
         transactions.to_excel(w,sheet_name="Οικονομικές Κινήσεις",index=False)
+        surveys.to_excel(w,sheet_name="Έρευνες",index=False)
+        survey_metrics.to_excel(w,sheet_name="Survey KPI",index=False)
+        survey_findings.to_excel(w,sheet_name="Survey Findings",index=False)
     st.download_button("⬇️ Λήψη συνολικού Excel",out.getvalue(),"KEDIVIM_Monitoring.xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     st.info("Τα PDF executive reports θα προστεθούν όταν υπάρχουν αρκετά πραγματικά δεδομένα για ουσιαστική αναφορά.")
 
@@ -582,6 +647,7 @@ elif page=="Ρυθμίσεις":
             ("Έξοδα","cost_base","cost","description"),
             ("Monitoring","findings_actions","monitoring","finding"),
             ("Οικονομικές κινήσεις","financial_transactions","transaction","description"),
+            ("Αξιολόγηση & Έρευνες","surveys","survey","title"),
         ]
         trashed=[]
         for label,table,etype,titlecol in configs:
