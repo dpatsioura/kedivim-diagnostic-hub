@@ -1,13 +1,14 @@
-# ΚΕΔΙΒΙΜ · Diagnostic Hub — CLEAN V2
+# ΚΕΔΙΒΙΜ · Diagnostic Hub — CLEAN V3 FINAL
 
-Final functional upgrade:
-- PDF/JPG/JPEG/PNG attachments in Programs, Cash Flow, Expenses and Monitoring
-- Edit on saved records
-- Soft delete to Trash
-- Restore from Trash
-- Permanent deletion one-by-one
+Finalized workflow:
+- visible multi-file upload during NEW record creation
+- PDF/JPG/JPEG/PNG attachments for Programs, Cash Flow, Expenses, Monitoring
+- attachment viewing and individual deletion after save
+- edit saved records
+- soft delete to Trash
+- restore
+- permanent deletion one-by-one
 - Empty Trash
-- Permanent deletion also removes associated stored attachments
 
-Before deployment run `SUPABASE_UPGRADE_CLEAN_V2.sql` once in Supabase SQL Editor.
-Existing Streamlit Secrets remain unchanged.
+Run `SUPABASE_UPGRADE_CLEAN_V2.sql` once if you have not already run it.
+No new Streamlit Secrets are required.
