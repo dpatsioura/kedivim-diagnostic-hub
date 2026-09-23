@@ -450,22 +450,69 @@ elif page=="Οικονομικά":
 
     with tab4:
         st.subheader("Budget vs Actual")
+        st.caption("Σύγκριση προϋπολογισμού και πραγματικής οικονομικής εκτέλεσης ανά πρόγραμμα.")
         if len(programs)==0:
             st.info("Δεν υπάρχουν προγράμματα.")
         else:
-            rows=[]
-            for _,pr in programs.iterrows():
+            for _,pr in programs.sort_values(["year","program_name"],ascending=[False,True]).iterrows():
                 pid=str(pr["id"])
                 pt=transactions[transactions["program_id"].astype(str)==pid] if len(transactions) else pd.DataFrame()
-                ai,ae=tx_amounts(pt)
-                br=float(pr.get("budget_revenue") or 0)
-                be=float(pr.get("budget_expenses") or 0)
-                rows.append({"Πρόγραμμα":pr.get("program_name"),"Budget έσοδα":br,"Actual έσοδα":ai,
-                             "Budget έξοδα":be,"Actual έξοδα":ae,"Actual αποτέλεσμα":ai-ae})
-            bdf=pd.DataFrame(rows)
-            st.dataframe(bdf,use_container_width=True,hide_index=True)
+                actual_income,actual_expense=tx_amounts(pt)
+                budget_income=float(pr.get("budget_revenue") or 0)
+                budget_expense=float(pr.get("budget_expenses") or 0)
+                actual_result=actual_income-actual_expense
+                title=str(pr.get("program_name") or "Χωρίς τίτλο")
+                year=pr.get("year") or ""
+                status=pr.get("status") or "—"
+
+                with st.container(border=True):
+                    h1,h2=st.columns([4,1])
+                    h1.markdown(f"### {title}")
+                    h1.caption(f"Κύκλος/Έτος: {year} · Status: {status}")
+                    h2.metric("Actual αποτέλεσμα",eur(actual_result))
+
+                    if budget_income<=0 and budget_expense<=0:
+                        st.info("Δεν έχει οριστεί ακόμη Budget εσόδων ή εξόδων για αυτό το πρόγραμμα.")
+                    else:
+                        c1,c2=st.columns(2)
+                        with c1:
+                            st.markdown("**Έσοδα**")
+                            a,b=st.columns(2)
+                            a.metric("Budget",eur(budget_income) if budget_income>0 else "Δεν έχει οριστεί")
+                            b.metric("Actual",eur(actual_income))
+                            if budget_income>0:
+                                pct=(actual_income/budget_income)*100
+                                st.progress(min(max(pct/100,0),1))
+                                st.caption(f"Εκτέλεση εσόδων: {pct:.1f}% · Απόκλιση: {eur(actual_income-budget_income)}")
+                            else:
+                                st.caption("Δεν μπορεί να υπολογιστεί ποσοστό εκτέλεσης χωρίς Budget εσόδων.")
+                        with c2:
+                            st.markdown("**Έξοδα**")
+                            a,b=st.columns(2)
+                            a.metric("Budget",eur(budget_expense) if budget_expense>0 else "Δεν έχει οριστεί")
+                            b.metric("Actual",eur(actual_expense))
+                            if budget_expense>0:
+                                pct=(actual_expense/budget_expense)*100
+                                st.progress(min(max(pct/100,0),1))
+                                st.caption(f"Εκτέλεση εξόδων: {pct:.1f}% · Απόκλιση: {eur(actual_expense-budget_expense)}")
+                            else:
+                                st.caption("Δεν μπορεί να υπολογιστεί ποσοστό εκτέλεσης χωρίς Budget εξόδων.")
+
+                    with st.expander("Περισσότερες λεπτομέρειες"):
+                        a,b,c=st.columns(3)
+                        a.metric("Πραγματικές εισπράξεις",eur(actual_income))
+                        b.metric("Πραγματικές πληρωμές",eur(actual_expense))
+                        c.metric("Καθαρό Actual",eur(actual_result))
+                        if len(pt):
+                            st.markdown("**Τελευταίες οικονομικές κινήσεις**")
+                            for _,tr in pt.sort_values("transaction_date",ascending=False).head(5).iterrows():
+                                sign="+" if tr.get("transaction_type")=="income" else "-"
+                                st.write(f"{tr.get('transaction_date')} · {tr.get('category')} · {tr.get('description')} · {sign}{eur(tr.get('amount',0))}")
+                        else:
+                            st.caption("Δεν υπάρχουν ακόμη οικονομικές κινήσεις συνδεδεμένες με το πρόγραμμα.")
+
             if st.session_state.admin:
-                st.caption("Τα budget στοιχεία αλλάζουν από την καρτέλα Προγράμματα → Επεξεργασία.")
+                st.caption("Τα Budget εσόδων και εξόδων ορίζονται από Προγράμματα → Επεξεργασία.")
 
 elif page=="Monitoring":
     st.caption("Εκκρεμότητες, actions και deadlines")

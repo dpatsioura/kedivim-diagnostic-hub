@@ -13,3 +13,15 @@ Database prerequisite:
 Run `SUPABASE_UPGRADE_CLEAN_V2.sql` once if it has not already been run.
 
 No new secrets are required.
+
+
+## UI refinement
+Budget vs Actual is now card-based instead of a raw dataframe.
+Each program shows:
+- Budget and Actual revenue
+- Budget and Actual expenses
+- execution percentages and progress bars
+- variance
+- actual result
+- expandable recent transaction details
+If no budget exists, the UI explicitly says so instead of showing meaningless zeroes.
